@@ -17,8 +17,6 @@ export function authorizeUrl(state) {
     state,
     prompt: 'select_account',
   });
-  // Pre-selects the Workspace account; still re-checked on the way back, since it's only a hint.
-  if (config.allowedEmailDomains.length === 1) params.set('hd', config.allowedEmailDomains[0]);
   return `${AUTH_URL}?${params}`;
 }
 
@@ -51,10 +49,12 @@ export async function exchangeCode(code) {
 
   const email = String(claims.email).toLowerCase();
   const domain = email.split('@')[1];
-  // `hd` is only present for Google Workspace accounts, so a personal Gmail can't pass this.
+  // Only accounts managed by a Google Workspace carry `hd` (personal Gmail doesn't), and only
+  // Per Diem's Workspace can hold verified @tryperdiem.com addresses. `hd` itself may be the
+  // organization's primary domain (e.g. per-diem.co), so the email domain is what we match.
   const allowed = config.allowedEmailDomains;
-  if (allowed.length && !(allowed.includes(domain) && allowed.includes(claims.hd))) {
-    const err = new Error(`Only @${allowed.join(' / @')} Google accounts can use PagerDiem.`);
+  if (!claims.hd || (allowed.length && !allowed.includes(domain))) {
+    const err = new Error(`Only @${allowed.join(' / @')} Google Workspace accounts can use PagerDiem.`);
     err.status = 403;
     throw err;
   }

@@ -30,10 +30,16 @@ test('Google: a tryperdiem.com Workspace account is accepted', async (t) => {
   assert.deepEqual(await google.exchangeCode('code'), { email: 'maya@tryperdiem.com', name: 'Maya Cohen' });
 });
 
+test("Google: accepted when the Workspace's primary domain differs (per-diem.co)", async (t) => {
+  t.mock.method(globalThis, 'fetch', fakeGoogle({ email: 'maya@tryperdiem.com', hd: 'per-diem.co', name: 'Maya' }));
+  assert.equal((await google.exchangeCode('code')).email, 'maya@tryperdiem.com');
+});
+
 test('Google: personal Gmail, other workspaces and unverified emails are rejected', async (t) => {
   const cases = [
     { email: 'maya@gmail.com' },
     { email: 'maya@othercompany.com', hd: 'othercompany.com' },
+    { email: 'maya@per-diem.co', hd: 'per-diem.co' }, // only tryperdiem.com addresses are allowed
     { email: 'maya@tryperdiem.com' }, // no hd claim = not a Workspace account
     { email: 'maya@tryperdiem.com', hd: 'tryperdiem.com', email_verified: false },
     { email: 'maya@tryperdiem.com', hd: 'tryperdiem.com', aud: 'someone-elses-app' },
@@ -45,10 +51,10 @@ test('Google: personal Gmail, other workspaces and unverified emails are rejecte
   }
 });
 
-test('Google: the sign-in link pins the tryperdiem.com domain', () => {
+test('Google: the sign-in link asks only for identity scopes', () => {
   const url = new URL(google.authorizeUrl('state123'));
-  assert.equal(url.searchParams.get('hd'), 'tryperdiem.com');
   assert.equal(url.searchParams.get('scope'), 'openid email profile');
+  assert.equal(url.searchParams.get('redirect_uri'), `${config.publicUrl}/auth/google/callback`);
 });
 
 // ---------- the web app with Google on ----------
