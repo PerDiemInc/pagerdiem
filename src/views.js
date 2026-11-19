@@ -56,12 +56,23 @@ code{background:var(--chip);padding:1px 6px;border-radius:5px;font-size:13px;wor
 .timeline{list-style:none;padding:0;margin:0}.timeline li{padding:8px 0;border-bottom:1px solid var(--line)}
 .now{outline:2px solid var(--accent);outline-offset:-2px}
 @media (max-width:640px){.hide-sm{display:none}}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-top:1px solid var(--line);border-left:1px solid var(--line)}
+.cal>div{border-right:1px solid var(--line);border-bottom:1px solid var(--line);min-height:92px;padding:6px;min-width:0}
+.cal .dow{min-height:0;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;background:var(--bg)}
+.cal .out{background:var(--bg);color:var(--muted)}
+.cal .num{font-size:13px;font-weight:600}.cal .today .num{background:var(--accent);color:var(--accent-ink);border-radius:99px;padding:1px 7px}
+.oc{display:block;margin-top:6px;padding:4px 6px;border-radius:6px;font-size:12px;font-weight:600;line-height:1.3;
+background:hsl(var(--h) 75% 91%);color:hsl(var(--h) 60% 25%);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.oc small{display:block;font-weight:500;opacity:.8}
+@media (prefers-color-scheme:dark){.oc{background:hsl(var(--h) 35% 22%);color:hsl(var(--h) 70% 85%)}}
+.swatch{display:inline-block;width:12px;height:12px;border-radius:3px;background:hsl(var(--h) 70% 60%);margin-right:6px;vertical-align:-1px}
+@media (max-width:640px){.cal>div{min-height:64px;padding:3px}.oc{font-size:10px;padding:2px 3px}.oc small{display:none}}
 `;
 
 export function layout({ title, user, body, flash, active }) {
   const link = (href, label, key) => `<a href="${href}" class="${active === key ? 'on' : ''}">${label}</a>`;
   const nav = user
-    ? `<nav>${link('/', 'On call', 'home')}${link('/incidents', 'Incidents', 'incidents')}${link('/team', 'Team', 'team')}${link('/settings', 'Settings', 'settings')}</nav>
+    ? `<nav>${link('/', 'On call', 'home')}${link('/calendar', 'Calendar', 'calendar')}${link('/incidents', 'Incidents', 'incidents')}${link('/team', 'Team', 'team')}${link('/settings', 'Settings', 'settings')}</nav>
        <div class="row small"><span class="muted">${esc(user.name)}</span><form method="post" action="/logout" class="inline"><button class="sm">Log out</button></form></div>`
     : '<nav></nav>';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -76,30 +87,59 @@ export function layout({ title, user, body, flash, active }) {
 
 const initials = (name) => esc(String(name || '?').split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase());
 
-export function authPage({ mode, values = {}, error, domains }) {
+const GOOGLE_ICON = `<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>`;
+
+const contactFields = (values = {}) => `
+    <label for="slack">Your Slack</label>
+    <input id="slack" name="slack" value="${esc(values.slack)}" placeholder="Slack email or member ID (U0123ABCD)">
+    <div class="hint">Leave blank to use your work email. Or paste your member ID: Slack → your profile → ⋮ → Copy member ID. Each person needs their own.</div>
+    <label for="whatsapp">Your WhatsApp number</label>
+    <input id="whatsapp" name="whatsapp" type="tel" required value="${esc(values.whatsapp)}" placeholder="+1 415 555 0123" autocomplete="tel">
+    <div class="hint">With country code. Pages arrive here when you're on call.</div>`;
+
+export function authPage({ mode, values = {}, error, domains, google, notConfigured }) {
   const signup = mode === 'signup';
-  const body = `<div class="auth card">
+  const only = domains.length ? `@${domains.map(esc).join(' / @')}` : '';
+  const body = notConfigured
+    ? `<div class="auth card"><h1>PagerDiem</h1>
+  <p>Sign-in isn't set up yet. An admin needs to add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> so only Per Diem Google accounts can get in.</p></div>`
+    : google
+    ? `<div class="auth card">
+  <h1>PagerDiem</h1>
+  <p class="muted">Weekend on-call for the Per Diem engineering team.</p>
+  ${error ? `<div class="flash error">${esc(error)}</div>` : ''}
+  <p><a class="btn" href="/auth/google" style="display:flex;gap:10px;align-items:center;justify-content:center">${GOOGLE_ICON} Sign in with Google</a></p>
+  ${only ? `<p class="small muted">Only ${only} Google accounts can sign in. First time? Sign in and you'll be asked for your Slack and WhatsApp.</p>` : ''}
+</div>`
+    : `<div class="auth card">
   <h1>${signup ? 'Join the Per Diem on-call rotation' : 'Log in'}</h1>
   ${error ? `<div class="flash error">${esc(error)}</div>` : ''}
   <form method="post" action="/${mode}">
     ${signup ? `<label for="name">Full name</label><input id="name" name="name" required value="${esc(values.name)}" autocomplete="name">` : ''}
     <label for="email">Work email</label>
     <input id="email" name="email" type="email" required value="${esc(values.email)}" autocomplete="email">
-    ${signup && domains.length ? `<div class="hint">Must be an @${domains.map(esc).join(' or @')} address.</div>` : ''}
+    ${signup && only ? `<div class="hint">Must be an ${only} address.</div>` : ''}
     <label for="password">Password</label>
     <input id="password" name="password" type="password" required minlength="${signup ? 10 : 1}" autocomplete="${signup ? 'new-password' : 'current-password'}">
-    ${signup ? `<div class="hint">At least 10 characters.</div>
-    <label for="slack">Slack</label>
-    <input id="slack" name="slack" value="${esc(values.slack)}" placeholder="Slack email or member ID (U0123ABCD)">
-    <div class="hint">Leave blank to use your work email. Find your member ID in Slack → your profile → ⋮ → Copy member ID.</div>
-    <label for="whatsapp">WhatsApp number</label>
-    <input id="whatsapp" name="whatsapp" type="tel" required value="${esc(values.whatsapp)}" placeholder="+1 415 555 0123" autocomplete="tel">
-    <div class="hint">Include the country code. Pages arrive here when you're on call.</div>` : ''}
+    ${signup ? `<div class="hint">At least 10 characters.</div>${contactFields(values)}` : ''}
     <p><button class="primary" type="submit">${signup ? 'Sign up' : 'Log in'}</button></p>
   </form>
   <p class="small muted">${signup ? 'Already signed up? <a href="/login">Log in</a>' : 'New to the team? <a href="/signup">Sign up</a>'}</p>
 </div>`;
   return layout({ title: signup ? 'Sign up' : 'Log in', body });
+}
+
+export function welcomePage({ identity, values = {}, error }) {
+  const body = `<div class="auth card">
+  <h1>Welcome, ${esc(identity.name.split(' ')[0])}!</h1>
+  <p class="muted small">Signed in as ${esc(identity.email)}. Add how we reach you when you're on call.</p>
+  ${error ? `<div class="flash error">${esc(error)}</div>` : ''}
+  <form method="post" action="/welcome">
+    <label for="name">Full name</label><input id="name" name="name" required value="${esc(values.name)}" autocomplete="name">
+    ${contactFields(values)}
+    <p><button class="primary" type="submit">Join the rotation</button></p>
+  </form></div>`;
+  return layout({ title: 'Welcome', body });
 }
 
 function personCell(u, extra = '') {
@@ -270,4 +310,46 @@ export function settingsPage({ user, status, notifications, flash }) {
 export function messagePage({ user, title, message, link }) {
   const body = `<div class="auth card"><h1>${esc(title)}</h1><p>${esc(message)}</p>${link ? `<p><a class="btn primary" href="${esc(link.href)}">${esc(link.label)}</a></p>` : ''}</div>`;
   return layout({ title, user, body });
+}
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const hue = (id) => (Number(id) * 137) % 360;
+
+export function calendarPage({ user, grid, prevMonth, nextMonth, thisMonth, feedUrl, flash }) {
+  const tz = config.timezone;
+  const dows = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => `<div class="dow">${d}</div>`).join('');
+  const timeOf = (d) => new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }).format(d);
+  const cells = grid.weeks.flat().map((d) => {
+    const e = d.entry;
+    const chip = e?.user
+      ? `<span class="oc" style="--h:${hue(e.user.id)}" title="${esc(e.user.name)} on call">${esc(e.user.name)}${
+        d.isStart ? `<small>from ${esc(timeOf(e.shift.start))}</small>` : d.isEnd ? `<small>until ${esc(timeOf(e.shift.end))}</small>` : ''}</span>`
+      : '';
+    return `<div class="${d.inMonth ? '' : 'out'} ${d.today ? 'today' : ''}"><span class="num">${d.day}</span>${chip}</div>`;
+  }).join('');
+
+  const list = grid.entries.length
+    ? `<table>${grid.entries.map((e) => `<tr>
+        <td><strong>${esc(formatRange(e.shift, tz))}</strong><div class="small muted">${esc(fmt(e.shift.start))} → ${esc(fmt(e.shift.end))}</div></td>
+        <td>${e.user ? `<span class="swatch" style="--h:${hue(e.user.id)}"></span>${esc(e.user.name)}` : '<span class="muted">nobody</span>'}
+          ${e.user && e.base && e.user.id !== e.base.id ? ` <span class="pill">covering for ${esc(e.base.name)}</span>` : ''}</td></tr>`).join('')}</table>`
+    : '<p class="muted">No weekends scheduled this month yet.</p>';
+
+  const googleAdd = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(feedUrl.replace(/^https?:/, 'webcal:'))}`;
+  const body = `<div class="row" style="justify-content:space-between;margin-bottom:12px">
+    <h1 style="margin:0">${MONTHS[grid.month - 1]} ${grid.year}</h1>
+    <div class="row"><a class="btn" href="/calendar?month=${prevMonth}" aria-label="Previous month">←</a>
+      <a class="btn" href="/calendar?month=${thisMonth}">Today</a>
+      <a class="btn" href="/calendar?month=${nextMonth}" aria-label="Next month">→</a></div></div>
+  <div class="card" style="padding:0;overflow:hidden"><div class="cal">${dows}${cells}</div></div>
+  <div class="grid">
+    <div class="card"><h2>Weekends this month</h2>${list}
+      <p class="small muted" style="margin-bottom:0">Need to swap? Use the rotation on the <a href="/">On call</a> page.</p></div>
+    <div class="card"><h2>Add to your calendar</h2>
+      <p class="small">Subscribe once and every on-call weekend shows up in your calendar, updated automatically.</p>
+      <p><a class="btn primary" href="${esc(googleAdd)}" target="_blank" rel="noopener">Add to Google Calendar</a></p>
+      <p class="small muted">Other apps: subscribe to this URL. Keep it inside the team.</p>
+      <p class="small"><code>${esc(feedUrl)}</code></p></div>
+  </div>`;
+  return layout({ title: 'Calendar', user, body, flash, active: 'calendar' });
 }

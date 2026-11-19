@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS users (
   rotation_order  INTEGER NOT NULL,
   created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
+-- Every person has their own Slack account and WhatsApp number.
+CREATE UNIQUE INDEX IF NOT EXISTS users_slack_unique ON users(slack_user_id) WHERE slack_user_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS users_whatsapp_unique ON users(whatsapp);
 CREATE TABLE IF NOT EXISTS shifts (
   weekend_key   TEXT PRIMARY KEY,
   base_user_id  INTEGER NOT NULL REFERENCES users(id),

@@ -61,3 +61,20 @@ export function safeEqual(a, b) {
   const y = Buffer.from(String(b));
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
+
+/** A small signed, expiring payload for cookies (OAuth state, pending Google signups). */
+export function signPayload(obj, ttlSeconds) {
+  const body = Buffer.from(JSON.stringify({ ...obj, exp: Date.now() + ttlSeconds * 1000 })).toString('base64url');
+  return `${body}.${sign(body)}`;
+}
+
+export function readPayload(value) {
+  const [body, sig] = String(value || '').split('.');
+  if (!body || !sig || !safeEqual(sig, sign(body))) return null;
+  try {
+    const obj = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    return obj.exp > Date.now() ? obj : null;
+  } catch {
+    return null;
+  }
+}

@@ -145,7 +145,7 @@ export function makeRotation(db, shifts) {
   }
 
   return {
-    activeMembers, userById, schedule, forShift, lock, onCallNow, backupFor,
+    activeMembers, userById, schedule, rotationStartKey, forShift, lock, onCallNow, backupFor,
     setOverride, clearOverride, move, nextRotationOrder,
   };
 }

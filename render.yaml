@@ -20,6 +20,10 @@ services:
         generateValue: true
       - key: DATABASE_URL        # Neon Postgres connection string (asked for when you create the Blueprint)
         sync: false
+      - key: GOOGLE_CLIENT_ID      # Google sign-in, limited to tryperdiem.com
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
       - key: ALLOWED_EMAIL_DOMAINS
         value: tryperdiem.com
       - key: TEAM_TIMEZONE

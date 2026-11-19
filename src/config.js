@@ -25,6 +25,11 @@ if (isProd && !env.SESSION_SECRET) {
   throw new Error('SESSION_SECRET is required in production');
 }
 
+// PagerDiem is for the Per Diem team only: production must name the allowed email domain(s).
+if (isProd && !(env.ALLOWED_EMAIL_DOMAINS ?? 'tryperdiem.com').trim()) {
+  throw new Error('ALLOWED_EMAIL_DOMAINS must be set in production (e.g. tryperdiem.com)');
+}
+
 export const config = {
   port: int('PORT', 3000),
   // Render sets RENDER_EXTERNAL_URL automatically, so PUBLIC_URL is optional there.
@@ -38,7 +43,8 @@ export const config = {
   // A random secret is fine locally; sessions just reset when the server restarts.
   sessionSecret: env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
 
-  // Only people with these email domains can sign up (comma-separated). Empty = anyone.
+  // Only Google Workspace accounts on these domains can sign in (comma-separated).
+  // Empty = anyone, which is allowed only for local development.
   allowedEmailDomains: (env.ALLOWED_EMAIL_DOMAINS ?? 'tryperdiem.com')
     .split(',').map((d) => d.trim().toLowerCase()).filter(Boolean),
 
@@ -53,6 +59,12 @@ export const config = {
   repageEveryMinutes: int('REPAGE_EVERY_MINUTES', 5),
 
   apiToken: env.API_TOKEN || '',
+
+  // Google sign-in. When set, Google (limited to allowedEmailDomains) is the only way in.
+  google: {
+    clientId: env.GOOGLE_CLIENT_ID || '',
+    clientSecret: env.GOOGLE_CLIENT_SECRET || '',
+  },
 
   slack: {
     botToken: env.SLACK_BOT_TOKEN || '',
@@ -74,6 +86,7 @@ export const config = {
   },
 };
 
+export const googleEnabled = () => Boolean(config.google.clientId && config.google.clientSecret);
 export const slackEnabled = () => Boolean(config.slack.botToken);
 export const whatsappEnabled = () =>
   Boolean(config.whatsapp.accountSid && config.whatsapp.from &&

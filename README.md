@@ -3,7 +3,8 @@
 A small PagerDuty-style on-call tool for the Per Diem engineering team. One person is on call each
 weekend, the rotation moves on automatically, and pages reach the on-call person on **Slack and WhatsApp**.
 
-- **Sign up** with your work email, your Slack account and your WhatsApp number. Only `@tryperdiem.com` emails can sign up by default.
+- **Per Diem only:** sign in with Google, limited to the `tryperdiem.com` Google Workspace. Personal Gmail and other companies' accounts are refused. First-time users add their own Slack account and WhatsApp number; no two people can share either.
+- **Calendar:** a month view showing who is on call each weekend, plus a feed you can subscribe to in Google Calendar.
 - **Weekend rotation:** Friday 18:00 → Monday 09:00 (team time zone, configurable). Each weekend goes to the next person in the list.
 - **Reminders:** the on-call person gets a Slack + WhatsApp heads-up 24h before their weekend, a "you're on call now" message when it starts, and the channel gets a hand-off summary when it ends.
 - **Swaps:** anyone can swap a weekend from the dashboard. The swap only changes that weekend, and both people are told.
@@ -31,6 +32,14 @@ under **Settings → Recent messages**, so you can try the whole flow first.
 ```bash
 npm test
 ```
+
+## Google sign-in (required in production)
+
+1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials) for the Per Diem organization, set the **OAuth consent screen** to **Internal**. That limits sign-in to Per Diem's Google Workspace at Google's end too.
+2. **Create credentials → OAuth client ID → Web application.** Add the authorized redirect URI `{PUBLIC_URL}/auth/google/callback`.
+3. Put the client ID and secret in `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
+
+The app also checks every sign-in itself: the account must be a verified `tryperdiem.com` Workspace account. Locally, without these values, it falls back to email + password so you can try it out. In production that fallback is off.
 
 ## Connect Slack
 

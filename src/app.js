@@ -1,7 +1,10 @@
 // Wires everything together and defines the HTTP routes.
 import http from 'node:http';
-import { config, slackEnabled, whatsappEnabled } from './config.js';
-import { makeShifts, formatLocal, formatRange, parseKey } from './time.js';
+import crypto from 'node:crypto';
+import { config, slackEnabled, whatsappEnabled, googleEnabled } from './config.js';
+import * as google from './google.js';
+import { makeShifts, formatLocal, formatRange, parseKey, tzParts } from './time.js';
+import * as calendar from './calendar.js';
 import { makeRotation } from './rotation.js';
 import { makeNotifier } from './notify/index.js';
 import { makeIncidents } from './incidents.js';
@@ -10,6 +13,7 @@ import { lookupUserIdByEmail, verifySlackSignature, mention } from './notify/sla
 import { normalizePhone, verifyTwilioSignature } from './notify/whatsapp.js';
 import {
   hashPassword, verifyPassword, sessionCookie, clearSessionCookie, sessionUserId, parseCookies, safeEqual,
+  signPayload, readPayload,
 } from './auth.js';
 import { HttpError, readBody, parseBody, makeResponder, makeRouter } from './http.js';
 import * as views from './views.js';
@@ -86,58 +90,157 @@ export function createApp({ db, notifierOverrides } = {}) {
   }
 
   // ---------- auth ----------
-  router.get('/signup', async (ctx) => ctx.r.html(views.authPage({ mode: 'signup', domains: config.allowedEmailDomains })));
+  // Production: "Sign in with Google", limited to Per Diem's Workspace domain.
+  // Local dev (no GOOGLE_CLIENT_ID): email + password, limited to the same email domains.
 
-  router.post('/signup', async (ctx) => {
-    const b = ctx.body;
-    const values = { name: b.name, email: b.email, slack: b.slack, whatsapp: b.whatsapp };
-    const fail = (error) => ctx.r.html(views.authPage({ mode: 'signup', values, error, domains: config.allowedEmailDomains }), 400);
-
-    const name = String(b.name || '').trim().slice(0, 80);
-    const email = String(b.email || '').trim().toLowerCase();
-    const password = String(b.password || '');
-    const whatsapp = normalizePhone(b.whatsapp);
-    if (!name) return fail('Please enter your name.');
-    if (!EMAIL.test(email)) return fail('Please enter a valid email.');
-    const domain = email.split('@')[1];
-    if (config.allowedEmailDomains.length && !config.allowedEmailDomains.includes(domain)) {
-      return fail(`Sign up with your @${config.allowedEmailDomains.join(' or @')} email.`);
-    }
-    if (password.length < 10) return fail('Password must be at least 10 characters.');
-    if (!whatsapp) return fail('Please enter a WhatsApp number with country code, e.g. +1 415 555 0123.');
-    if ((await userByEmail(email))) return fail('That email is already signed up — log in instead.');
-
-    const slackId = await resolveSlack(b.slack, email);
-    if (slackEnabled() && !slackId) return fail("We couldn't find you on Slack. Enter your Slack member ID (Slack profile → ⋮ → Copy member ID).");
+  /**
+   * Validate and add a team member. Each person must have their own Slack account and
+   * WhatsApp number. Returns { user } or { error }.
+   */
+  async function createMember({ name, email, slack, whatsapp: rawPhone, passwordHash }) {
+    name = String(name || '').trim().slice(0, 80);
+    const whatsapp = normalizePhone(rawPhone);
+    if (!name) return { error: 'Please enter your name.' };
+    if (!whatsapp) return { error: 'Please enter your WhatsApp number with country code, e.g. +1 415 555 0123.' };
+    if (await userByEmail(email)) return { error: 'That email is already signed up — log in instead.' };
+    const slackId = await resolveSlack(slack, email);
+    if (!slackId) return { error: "We couldn't find you on Slack. Enter your Slack member ID (Slack profile → ⋮ → Copy member ID)." };
+    const clash = await contactClash({ slackId, whatsapp });
+    if (clash) return { error: clash };
 
     const isFirst = (await userCount()) === 0;
-    const { id: newUserId } = (await db.get(`INSERT INTO users (name, email, password_hash, slack_user_id, whatsapp, is_admin, rotation_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`, [name, email, hashPassword(password), slackId, whatsapp, isFirst ? 1 : 0, (await rotation.nextRotationOrder())]));
-    ctx.r.cookie(sessionCookie(Number(newUserId)));
-    setFlash(ctx.r, 'ok', isFirst
+    const { id } = await db.get(`INSERT INTO users (name, email, password_hash, slack_user_id, whatsapp, is_admin, rotation_order)
+      VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    [name, email, passwordHash, slackId, whatsapp, isFirst ? 1 : 0, await rotation.nextRotationOrder()]);
+    const user = await rotation.userById(Number(id));
+    await notify.channel({ text: `:wave: ${mention(user)} joined the weekend on-call rotation.` });
+    return { user, isFirst };
+  }
+
+  /** Someone else already uses this Slack account or phone number? Returns a message or null. */
+  async function contactClash({ slackId, whatsapp, exceptId = null }) {
+    const bySlack = await userBySlack(slackId);
+    if (bySlack && bySlack.id !== exceptId) return `That Slack account already belongs to ${bySlack.name}. Use your own Slack account.`;
+    const byPhone = await userByPhone(whatsapp);
+    if (byPhone && byPhone.id !== exceptId) return `That WhatsApp number already belongs to ${byPhone.name}. Use your own number.`;
+    return null;
+  }
+
+  function welcomeFlash(r, isFirst) {
+    setFlash(r, 'ok', isFirst
       ? "Welcome! You're the first member, so you're an admin. Invite the rest of the team to sign up."
       : "You're in the weekend rotation. Use “Send me a test message” on the Team page to check Slack and WhatsApp.");
-    await notify.channel({ text: `:wave: ${slackId && SLACK_ID.test(slackId) ? `<@${slackId}>` : name} joined the weekend on-call rotation.` });
-    ctx.r.redirect('/');
+  }
+
+  // Passwords can't prove someone works at Per Diem, so they're only for local development.
+  const passwordAuth = () => !googleEnabled() && !config.isProd;
+  const authView = (mode, extra = {}) => views.authPage({
+    mode, domains: config.allowedEmailDomains, google: googleEnabled(), notConfigured: !googleEnabled() && !passwordAuth(), ...extra,
   });
 
   router.get('/login', async (ctx) => {
-    if ((await userCount()) === 0) return ctx.r.redirect('/signup');
-    ctx.r.html(views.authPage({ mode: 'login', domains: config.allowedEmailDomains }));
+    if (ctx.user) return ctx.r.redirect('/');
+    if (passwordAuth() && (await userCount()) === 0) return ctx.r.redirect('/signup');
+    ctx.r.html(authView('login', { error: ctx.query.get('error') ? 'Sign-in failed. Please try again.' : null }));
+  });
+
+  router.get('/signup', async (ctx) => {
+    if (!passwordAuth()) return ctx.r.redirect('/login'); // Google covers sign-up too
+    ctx.r.html(authView('signup'));
+  });
+
+  router.post('/signup', async (ctx) => {
+    if (!passwordAuth()) throw new HttpError(404, 'Not found');
+    const b = ctx.body;
+    const fail = (error) => ctx.r.html(authView('signup', { values: b, error }), 400);
+    const email = String(b.email || '').trim().toLowerCase();
+    if (!EMAIL.test(email)) return fail('Please enter a valid email.');
+    if (config.allowedEmailDomains.length && !config.allowedEmailDomains.includes(email.split('@')[1])) {
+      return fail(`Sign up with your @${config.allowedEmailDomains.join(' or @')} email.`);
+    }
+    if (String(b.password || '').length < 10) return fail('Password must be at least 10 characters.');
+    const { user, isFirst, error } = await createMember({
+      name: b.name, email, slack: b.slack, whatsapp: b.whatsapp, passwordHash: hashPassword(String(b.password)),
+    });
+    if (error) return fail(error);
+    ctx.r.cookie(sessionCookie(user.id));
+    welcomeFlash(ctx.r, isFirst);
+    ctx.r.redirect('/');
   });
 
   router.post('/login', async (ctx) => {
+    if (!passwordAuth()) throw new HttpError(404, 'Not found');
     const email = String(ctx.body.email || '').trim().toLowerCase();
     const key = throttleKey(ctx, email);
-    const fail = (error) => ctx.r.html(views.authPage({ mode: 'login', values: { email }, error, domains: [] }), 400);
+    const fail = (error) => ctx.r.html(authView('login', { values: { email }, error }), 400);
     if (tooManyAttempts(key)) return fail('Too many attempts. Try again in 15 minutes.');
-    const user = (await userByEmail(email));
+    const user = await userByEmail(email);
     if (!user || !verifyPassword(String(ctx.body.password || ''), user.password_hash)) {
       recordFailure(key);
       return fail('Wrong email or password.');
     }
     failures.delete(key);
     ctx.r.cookie(sessionCookie(user.id));
+    ctx.r.redirect('/');
+  });
+
+  // --- Google ---
+  const OAUTH_COOKIE = 'pd_oauth';
+  const PENDING_COOKIE = 'pd_pending';
+  const tempCookie = (name, value, maxAge) =>
+    `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${config.publicUrl.startsWith('https://') ? '; Secure' : ''}`;
+
+  router.get('/auth/google', async (ctx) => {
+    if (!googleEnabled()) throw new HttpError(404, 'Not found');
+    const state = crypto.randomBytes(16).toString('hex');
+    ctx.r.cookie(tempCookie(OAUTH_COOKIE, signPayload({ state }, 600), 600));
+    ctx.r.redirect(google.authorizeUrl(state), 302);
+  });
+
+  router.get('/auth/google/callback', async (ctx) => {
+    if (!googleEnabled()) throw new HttpError(404, 'Not found');
+    const saved = readPayload(parseCookies(ctx.req.headers.cookie)[OAUTH_COOKIE]);
+    ctx.r.cookie(tempCookie(OAUTH_COOKIE, '', 0));
+    const state = ctx.query.get('state');
+    if (!saved || !state || !safeEqual(saved.state, state) || !ctx.query.get('code')) return ctx.r.redirect('/login?error=1');
+
+    let identity;
+    try {
+      identity = await google.exchangeCode(ctx.query.get('code'));
+    } catch (err) {
+      if (err.status === 403) throw new HttpError(403, err.message);
+      console.error(err.message);
+      return ctx.r.redirect('/login?error=1');
+    }
+    const existing = await userByEmail(identity.email);
+    if (existing) {
+      ctx.r.cookie(sessionCookie(existing.id));
+      return ctx.r.redirect('/');
+    }
+    // New teammate: ask for their Slack and WhatsApp before adding them to the rotation.
+    ctx.r.cookie(tempCookie(PENDING_COOKIE, signPayload(identity, 1800), 1800));
+    ctx.r.redirect('/welcome');
+  });
+
+  const pendingIdentity = (ctx) => readPayload(parseCookies(ctx.req.headers.cookie)[PENDING_COOKIE]);
+
+  router.get('/welcome', async (ctx) => {
+    const identity = pendingIdentity(ctx);
+    if (!identity) return ctx.r.redirect('/login');
+    ctx.r.html(views.welcomePage({ identity, values: { name: identity.name } }));
+  });
+
+  router.post('/welcome', async (ctx) => {
+    const identity = pendingIdentity(ctx);
+    if (!identity) return ctx.r.redirect('/login');
+    const { user, isFirst, error } = await createMember({
+      name: ctx.body.name, email: identity.email, slack: ctx.body.slack, whatsapp: ctx.body.whatsapp,
+      passwordHash: 'google', // no password: Google is the only way in
+    });
+    if (error) return ctx.r.html(views.welcomePage({ identity, values: ctx.body, error }), 400);
+    ctx.r.cookie(tempCookie(PENDING_COOKIE, '', 0));
+    ctx.r.cookie(sessionCookie(user.id));
+    welcomeFlash(ctx.r, isFirst);
     ctx.r.redirect('/');
   });
 
@@ -190,6 +293,31 @@ export function createApp({ db, notifierOverrides } = {}) {
     (await rotation.clearOverride(ctx.params.key));
     setFlash(ctx.r, 'ok', 'Swap undone.');
     ctx.r.redirect('/');
+  });
+
+  // ---------- calendar ----------
+  router.get('/calendar', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    const today = tzParts(new Date(), config.timezone);
+    const m = /^(\d{4})-(\d{2})$/.exec(ctx.query.get('month') || '');
+    const year = m ? Number(m[1]) : today.year;
+    const month = m && Number(m[2]) >= 1 && Number(m[2]) <= 12 ? Number(m[2]) : today.month;
+    const ym = (y, mo) => `${y}-${String(mo).padStart(2, '0')}`;
+    const prev = month === 1 ? ym(year - 1, 12) : ym(year, month - 1);
+    const next = month === 12 ? ym(year + 1, 1) : ym(year, month + 1);
+    ctx.r.html(views.calendarPage({
+      user: ctx.user,
+      grid: await calendar.monthGrid({ shifts, rotation }, year, month),
+      prevMonth: prev, nextMonth: next, thisMonth: ym(today.year, today.month),
+      feedUrl: `${config.publicUrl}/calendar.ics?token=${calendar.feedToken()}`,
+      flash: takeFlash(ctx),
+    }));
+  });
+
+  // Subscribable feed for Google Calendar etc. Calendar apps can't log in, so it uses a secret token.
+  router.get('/calendar.ics', async (ctx) => {
+    if (!safeEqual(ctx.query.get('token') || '', calendar.feedToken())) throw new HttpError(404, 'Not found');
+    ctx.r.calendar(await calendar.icsFeed({ shifts, rotation }));
   });
 
   // ---------- incidents ----------
@@ -303,8 +431,13 @@ export function createApp({ db, notifierOverrides } = {}) {
       return ctx.r.redirect('/team');
     }
     const slackId = await resolveSlack(ctx.body.slack, ctx.user.email);
-    if (slackEnabled() && !slackId) {
+    if (!slackId) {
       setFlash(ctx.r, 'error', "Couldn't find that Slack account. Paste your Slack member ID instead.");
+      return ctx.r.redirect('/team');
+    }
+    const clash = await contactClash({ slackId, whatsapp, exceptId: ctx.user.id });
+    if (clash) {
+      setFlash(ctx.r, 'error', clash);
       return ctx.r.redirect('/team');
     }
     (await db.run('UPDATE users SET name = ?, whatsapp = ?, slack_user_id = ? WHERE id = ?', [name, whatsapp, slackId, ctx.user.id]));

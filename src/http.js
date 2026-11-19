@@ -48,6 +48,7 @@ export function makeResponder(res) {
     json: (obj, status = 200) => send(status, JSON.stringify(obj), 'application/json; charset=utf-8'),
     text: (body, status = 200) => send(status, body, 'text/plain; charset=utf-8'),
     xml: (body, status = 200) => send(status, body, 'text/xml; charset=utf-8'),
+    calendar: (body) => send(200, body, 'text/calendar; charset=utf-8'),
     redirect: (location, status = 303) => {
       if (res.headersSent) return;
       res.writeHead(status, { ...SECURITY_HEADERS, Location: location, 'Set-Cookie': cookies });
