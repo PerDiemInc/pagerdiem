@@ -1,0 +1,18 @@
+{
+  "name": "pagerdiem",
+  "version": "0.1.0",
+  "description": "Weekend on-call rotation and paging for the Per Diem engineering team (Slack + WhatsApp).",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "dev": "node --watch --env-file-if-exists=.env src/server.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  }
+}

@@ -1,0 +1,31 @@
+# Render Blueprint: dashboard.render.com -> New -> Blueprint -> pick this repo.
+services:
+  - type: web
+    name: pagerdiem
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/server.js
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: API_TOKEN
+        generateValue: true
+      - key: DATABASE_URL        # Neon Postgres connection string (asked for when you create the Blueprint)
+        sync: false
+      - key: ALLOWED_EMAIL_DOMAINS
+        value: tryperdiem.com
+      - key: TEAM_TIMEZONE
+        value: America/New_York
+      - key: SHIFT_START
+        value: FRI 18:00
+      - key: SHIFT_END
+        value: MON 09:00
+      # Slack / Twilio keys: add them later under Environment in the Render dashboard.
