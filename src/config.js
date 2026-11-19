@@ -74,6 +74,10 @@ export const config = {
     channel: env.SLACK_ONCALL_CHANNEL || '', // channel ID, e.g. C0123456789
   },
 
+  // Team WhatsApp group invite link, shown to signed-in teammates as a "Join" button.
+  // WhatsApp's business API can't post into groups, so pages still go to each person directly.
+  whatsappGroupUrl: /^https:\/\/chat\.whatsapp\.com\/[A-Za-z0-9]+$/.test(env.WHATSAPP_GROUP_URL || '') ? env.WHATSAPP_GROUP_URL : '',
+
   whatsapp: {
     // Twilio WhatsApp. Leave blank to run in dry-run mode (messages are only logged).
     accountSid: env.TWILIO_ACCOUNT_SID || '',

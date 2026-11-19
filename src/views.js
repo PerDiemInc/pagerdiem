@@ -223,8 +223,10 @@ export function dashboardPage({ user, now, onCall, nextEntry, backup, schedule, 
   const balanceRows = balance.map((b) => `<tr><td>${esc(b.user.name)}${b.user.is_admin ? ' <span class="pill">admin · optional</span>' : ''}</td>
     <td style="text-align:right"><strong>${b.weekends}</strong></td></tr>`).join('');
 
+  const group = config.whatsappGroupUrl
+    ? `<p style="margin:14px 0 0"><a class="btn" href="${esc(config.whatsappGroupUrl)}" target="_blank" rel="noopener noreferrer">💬 Join the on-call WhatsApp group</a></p>` : '';
   const body = `<div class="grid">
-    <div class="card">${hero}</div>
+    <div class="card">${hero}${group}</div>
     <div class="card"><h2>Page the on-call</h2>
       <form method="post" action="/incidents">
         <input name="title" required maxlength="200" placeholder="What's broken? e.g. Checkout failing for all stores">
