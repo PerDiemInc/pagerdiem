@@ -69,8 +69,8 @@ export async function icsFeed(deps) {
   const entries = await entriesBetween(deps, dateKey(addDays(today, -56)), dateKey(addDays(today, 7 * 26)));
   const stamp = icsDate(new Date());
   const lines = [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Per Diem//PagerDiem//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
-    'X-WR-CALNAME:Per Diem on-call', 'X-PUBLISHED-TTL:PT1H', 'REFRESH-INTERVAL;VALUE=DURATION:PT1H',
+    'BEGIN:VCALENDAR', 'VERSION:2.0', `PRODID:-//${config.appName}//EN`, 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+    `X-WR-CALNAME:${icsText(`${config.teamName} on-call`)}`, 'X-PUBLISHED-TTL:PT1H', 'REFRESH-INTERVAL;VALUE=DURATION:PT1H',
   ];
   for (const e of entries) {
     const who = e.people.map((p) => p.name).join(' & ');

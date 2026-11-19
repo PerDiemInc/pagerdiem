@@ -90,7 +90,7 @@ export function createApp({ db, notifierOverrides } = {}) {
   }
 
   // ---------- auth ----------
-  // Production: "Sign in with Google", limited to Per Diem's Workspace domain.
+  // Production: "Sign in with Google", limited to your Google Workspace domain (ALLOWED_EMAIL_DOMAINS).
   // Local dev (no GOOGLE_CLIENT_ID): email + password, limited to the same email domains.
 
   /**
@@ -132,7 +132,7 @@ export function createApp({ db, notifierOverrides } = {}) {
       : "You're in the weekend rotation. Use “Send me a test message” on the Team page to check Slack and WhatsApp.");
   }
 
-  // Passwords can't prove someone works at Per Diem, so they're only for local development.
+  // Passwords can't prove someone works at your company, so they're only for local development.
   const passwordAuth = () => !googleEnabled() && !config.isProd;
   const authView = (mode, extra = {}) => views.authPage({
     mode, domains: config.allowedEmailDomains, google: googleEnabled(), notConfigured: !googleEnabled() && !passwordAuth(), ...extra,
@@ -522,6 +522,13 @@ export function createApp({ db, notifierOverrides } = {}) {
   // ---------- Slack ----------
   function requireSlackSignature(ctx) {
     if (!verifySlackSignature(ctx.req.headers, ctx.raw)) throw new HttpError(401, 'Bad Slack signature');
+    if (config.slack.teamId) {
+      let team = ctx.body.team_id;
+      if (!team && ctx.body.payload) {
+        try { team = JSON.parse(ctx.body.payload).team?.id; } catch { team = null; }
+      }
+      if (team !== config.slack.teamId) throw new HttpError(403, 'This Slack workspace is not allowed');
+    }
   }
 
   async function onCallSummary() {
@@ -620,16 +627,21 @@ export function createApp({ db, notifierOverrides } = {}) {
   });
 
   // ---------- alerts API ----------
-  router.post('/api/incidents', async (ctx) => {
+  function requireApiToken(ctx) {
     const auth = String(ctx.req.headers.authorization || '');
     if (!config.apiToken || !auth.startsWith('Bearer ') || !safeEqual(auth.slice(7), config.apiToken)) {
       throw new HttpError(401, 'Unauthorized');
     }
+  }
+
+  router.post('/api/incidents', async (ctx) => {
+    requireApiToken(ctx);
     const inc = await incidents.create({ title: ctx.body.title, details: ctx.body.details, source: String(ctx.body.source || 'api').slice(0, 30) });
     ctx.r.json({ id: inc.id, status: inc.status, paged: (await rotation.userById(inc.assigned_user_id))?.name ?? null, url: `${config.publicUrl}/incidents/${inc.id}` }, 201);
   });
 
   router.get('/api/oncall', async (ctx) => {
+    requireApiToken(ctx); // names are team-internal
     const onCall = (await rotation.onCallNow());
     ctx.r.json({
       on_call: onCall?.people.length ? { names: onCall.people.map((p) => p.name), until: onCall.shift.end.toISOString() } : null,

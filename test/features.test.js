@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.TEAM_TIMEZONE = 'America/New_York';
-process.env.ALLOWED_EMAIL_DOMAINS = 'tryperdiem.com';
+process.env.ALLOWED_EMAIL_DOMAINS = 'example.com';
 process.env.GOOGLE_CLIENT_ID = 'test-client.apps.googleusercontent.com';
 process.env.GOOGLE_CLIENT_SECRET = 'test-secret';
 
@@ -12,7 +12,7 @@ const { freshDb } = await import('./helpers.js');
 const { createApp } = await import('../src/app.js');
 const calendar = await import('../src/calendar.js');
 
-// ---------- Google sign-in: only verified tryperdiem.com Workspace accounts ----------
+// ---------- Google sign-in: only verified example.com Workspace accounts ----------
 
 function fakeGoogle(claims) {
   const payload = Buffer.from(JSON.stringify({
@@ -25,24 +25,24 @@ function fakeGoogle(claims) {
   };
 }
 
-test('Google: a tryperdiem.com Workspace account is accepted', async (t) => {
-  t.mock.method(globalThis, 'fetch', fakeGoogle({ email: 'Maya@tryperdiem.com', hd: 'tryperdiem.com', name: 'Maya Cohen' }));
-  assert.deepEqual(await google.exchangeCode('code'), { email: 'maya@tryperdiem.com', name: 'Maya Cohen' });
+test('Google: a example.com Workspace account is accepted', async (t) => {
+  t.mock.method(globalThis, 'fetch', fakeGoogle({ email: 'Maya@example.com', hd: 'example.com', name: 'Maya Cohen' }));
+  assert.deepEqual(await google.exchangeCode('code'), { email: 'maya@example.com', name: 'Maya Cohen' });
 });
 
-test("Google: accepted when the Workspace's primary domain differs (per-diem.co)", async (t) => {
-  t.mock.method(globalThis, 'fetch', fakeGoogle({ email: 'maya@tryperdiem.com', hd: 'per-diem.co', name: 'Maya' }));
-  assert.equal((await google.exchangeCode('code')).email, 'maya@tryperdiem.com');
+test("Google: accepted when the Workspace's primary domain differs (corp.example.net)", async (t) => {
+  t.mock.method(globalThis, 'fetch', fakeGoogle({ email: 'maya@example.com', hd: 'corp.example.net', name: 'Maya' }));
+  assert.equal((await google.exchangeCode('code')).email, 'maya@example.com');
 });
 
 test('Google: personal Gmail, other workspaces and unverified emails are rejected', async (t) => {
   const cases = [
     { email: 'maya@gmail.com' },
     { email: 'maya@othercompany.com', hd: 'othercompany.com' },
-    { email: 'maya@per-diem.co', hd: 'per-diem.co' }, // only tryperdiem.com addresses are allowed
-    { email: 'maya@tryperdiem.com' }, // no hd claim = not a Workspace account
-    { email: 'maya@tryperdiem.com', hd: 'tryperdiem.com', email_verified: false },
-    { email: 'maya@tryperdiem.com', hd: 'tryperdiem.com', aud: 'someone-elses-app' },
+    { email: 'maya@corp.example.net', hd: 'corp.example.net' }, // only example.com addresses are allowed
+    { email: 'maya@example.com' }, // no hd claim = not a Workspace account
+    { email: 'maya@example.com', hd: 'example.com', email_verified: false },
+    { email: 'maya@example.com', hd: 'example.com', aud: 'someone-elses-app' },
   ];
   for (const claims of cases) {
     t.mock.method(globalThis, 'fetch', fakeGoogle(claims));
@@ -70,7 +70,7 @@ before(async () => {
 after(() => app.server.close());
 
 test('with Google on, password signup and login are disabled', async () => {
-  const signup = await fetch(`${base}/signup`, { method: 'POST', body: 'email=a@tryperdiem.com', redirect: 'manual',
+  const signup = await fetch(`${base}/signup`, { method: 'POST', body: 'email=a@example.com', redirect: 'manual',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
   assert.equal(signup.status, 404);
   const page = await (await fetch(`${base}/login`)).text();
@@ -85,7 +85,7 @@ test('Google round trip: new teammate adds Slack + WhatsApp; duplicates are refu
     const oauthCookie = start.headers.getSetCookie()[0].split(';')[0];
     // Fake only Google's token endpoint; calls to our own server go through for real.
     t.mock.method(globalThis, 'fetch', async (url, opts) => (String(url).startsWith('https://oauth2.googleapis.com')
-      ? fakeGoogle({ email, name, hd: 'tryperdiem.com' })(url)
+      ? fakeGoogle({ email, name, hd: 'example.com' })(url)
       : realFetch(url, opts)));
     const cb = await fetch(`${base}/auth/google/callback?state=${state}&code=abc`, { redirect: 'manual', headers: { cookie: oauthCookie } });
     t.mock.restoreAll();
@@ -95,17 +95,17 @@ test('Google round trip: new teammate adds Slack + WhatsApp; duplicates are refu
   const form = (o) => ({ method: 'POST', redirect: 'manual', body: new URLSearchParams(o).toString(),
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
 
-  let cb = await signIn('ana@tryperdiem.com', 'Ana Admin');
+  let cb = await signIn('ana@example.com', 'Ana Admin');
   assert.equal(cb.headers.get('location'), '/welcome');
   let pending = cb.headers.getSetCookie().find((c) => c.startsWith('pd_pending=')).split(';')[0];
   let res = await fetch(`${base}/welcome`, { ...form({ name: 'Ana Admin', slack: 'U0ANA12345', whatsapp: '+14155550100' }),
     headers: { ...form({}).headers, cookie: pending } });
   assert.equal(res.status, 303);
-  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@tryperdiem.com'");
+  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@example.com'");
   assert.equal(ana.slack_user_id, 'U0ANA12345');
   assert.equal(ana.is_admin, 1);
 
-  cb = await signIn('ben@tryperdiem.com', 'Ben');
+  cb = await signIn('ben@example.com', 'Ben');
   pending = cb.headers.getSetCookie().find((c) => c.startsWith('pd_pending=')).split(';')[0];
   const welcome = (fields) => fetch(`${base}/welcome`, { ...form(fields), headers: { ...form({}).headers, cookie: pending } });
   res = await welcome({ name: 'Ben', slack: 'U0ANA12345', whatsapp: '+14155550101' });
@@ -118,7 +118,7 @@ test('Google round trip: new teammate adds Slack + WhatsApp; duplicates are refu
   assert.equal(res.status, 303);
 
   // Returning user goes straight in.
-  cb = await signIn('ana@tryperdiem.com', 'Ana Admin');
+  cb = await signIn('ana@example.com', 'Ana Admin');
   assert.equal(cb.headers.get('location'), '/');
 });
 
@@ -153,14 +153,14 @@ test('calendar feed needs the secret token and lists weekends', async () => {
 });
 
 test('weekend add/remove only ever changes the signed-in user, and the log is visible to the team', async () => {
-  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@tryperdiem.com'");
+  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@example.com'");
   const { sessionCookie } = await import('../src/auth.js');
   const cookie = sessionCookie(ana.id).split(';')[0];
   const post = (path, body = '') => fetch(`${base}${path}`, { method: 'POST', redirect: 'manual', body,
     headers: { cookie, 'Content-Type': 'application/x-www-form-urlencoded' } });
 
   // Even if someone sends another user's id, the change applies to the signed-in user only.
-  const ben = await app.db.get("SELECT * FROM users WHERE email = 'ben@tryperdiem.com'");
+  const ben = await app.db.get("SELECT * FROM users WHERE email = 'ben@example.com'");
   let res = await post('/weekends/2026-12-04/join', `user_id=${ben.id}`);
   assert.equal(res.status, 303);
   let e = await app.rotation.forShift(app.shifts.forKey('2026-12-04'));
@@ -173,5 +173,5 @@ test('weekend add/remove only ever changes the signed-in user, and the log is vi
   const log = await (await fetch(`${base}/log`, { headers: { cookie } })).text();
   assert.match(log, /Ana Admin<\/strong>\s*added themselves/);
   assert.match(log, /Ana Admin<\/strong>\s*removed themselves/);
-  assert.equal((await fetch(`${base}/log`, { redirect: 'manual' })).status, 303, 'log needs a Per Diem sign-in');
+  assert.equal((await fetch(`${base}/log`, { redirect: 'manual' })).status, 303, 'log needs a team sign-in');
 });

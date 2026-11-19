@@ -1,8 +1,8 @@
-# Create the Slack app from this manifest: https://api.slack.com/apps -> Create New App -> From a manifest.
-# URLs point at the live Render service; change them if PUBLIC_URL changes.
+# Create the Slack app: https://api.slack.com/apps -> Create New App -> From a manifest.
+# Replace https://YOUR-APP.example.com with your PUBLIC_URL first.
 display_information:
   name: PagerDiem
-  description: Weekend on-call rotation and paging for Per Diem engineering
+  description: Weekend on-call rotation and paging
   background_color: "#e8492b"
 features:
   bot_user:
@@ -10,11 +10,11 @@ features:
     always_online: true
   slash_commands:
     - command: /oncall
-      url: https://pagerdiem.onrender.com/slack/commands
+      url: https://YOUR-APP.example.com/slack/commands
       description: Who's on call now and the next weekends
       should_escape: false
     - command: /page
-      url: https://pagerdiem.onrender.com/slack/commands
+      url: https://YOUR-APP.example.com/slack/commands
       description: Page whoever is on call
       usage_hint: "[what is broken]"
       should_escape: false
@@ -29,7 +29,7 @@ oauth_config:
 settings:
   interactivity:
     is_enabled: true
-    request_url: https://pagerdiem.onrender.com/slack/interactions
+    request_url: https://YOUR-APP.example.com/slack/interactions
   org_deploy_enabled: false
   socket_mode_enabled: false
   token_rotation_enabled: false

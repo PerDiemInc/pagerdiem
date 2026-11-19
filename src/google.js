@@ -1,5 +1,5 @@
-// "Sign in with Google" (OpenID Connect, authorization-code flow), limited to Per Diem's
-// Google Workspace domain. No dependencies.
+// "Sign in with Google" (OpenID Connect, authorization-code flow), limited to your company's
+// Google Workspace domain(s) in ALLOWED_EMAIL_DOMAINS. No dependencies.
 // https://developers.google.com/identity/openid-connect/openid-connect
 import { config } from './config.js';
 
@@ -50,8 +50,8 @@ export async function exchangeCode(code) {
   const email = String(claims.email).toLowerCase();
   const domain = email.split('@')[1];
   // Only accounts managed by a Google Workspace carry `hd` (personal Gmail doesn't), and only
-  // Per Diem's Workspace can hold verified @tryperdiem.com addresses. `hd` itself may be the
-  // organization's primary domain (e.g. per-diem.co), so the email domain is what we match.
+  // your Workspace can hold verified addresses on your domain. `hd` itself may be the
+  // organization's primary domain rather than the email's, so the email domain is what we match.
   const allowed = config.allowedEmailDomains;
   if (!claims.hd || (allowed.length && !allowed.includes(domain))) {
     const err = new Error(`Only @${allowed.join(' / @')} Google Workspace accounts can use PagerDiem.`);

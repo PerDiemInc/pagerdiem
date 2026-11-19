@@ -1,7 +1,7 @@
 {
   "name": "pagerdiem",
   "version": "0.1.0",
-  "description": "Weekend on-call rotation and paging for the Per Diem engineering team (Slack + WhatsApp).",
+  "description": "Self-hosted weekend on-call rotation and paging with Google sign-in, Slack and WhatsApp.",
   "type": "module",
   "private": true,
   "engines": {

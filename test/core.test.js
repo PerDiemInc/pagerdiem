@@ -53,7 +53,7 @@ async function setup() {
   });
   const addUser = async (name) => {
     await db.run(`INSERT INTO users (name, email, password_hash, slack_user_id, whatsapp, rotation_order)
-      VALUES (?, ?, 'x', ?, ?, ?)`, [name, `${name.toLowerCase()}@tryperdiem.com`, `U${name.toUpperCase()}000000`,
+      VALUES (?, ?, 'x', ?, ?, ?)`, [name, `${name.toLowerCase()}@example.com`, `U${name.toUpperCase()}000000`,
       `+1555000${String(name.charCodeAt(0)).padStart(4, '0')}`, await rotation.nextRotationOrder()]);
     return db.get('SELECT * FROM users WHERE name = ?', [name]);
   };

@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 
 process.env.API_TOKEN = 'test-api-token';
 process.env.SLACK_SIGNING_SECRET = 'slack-secret';
-process.env.ALLOWED_EMAIL_DOMAINS = 'tryperdiem.com';
+process.env.ALLOWED_EMAIL_DOMAINS = 'example.com';
 
 const { freshDb } = await import('./helpers.js');
 const { createApp } = await import('../src/app.js');
@@ -38,16 +38,16 @@ const cookieOf = (res) => res.headers.getSetCookie().find((c) => c.startsWith('p
 test('signup validates input and the first user becomes admin', async () => {
   let res = await post('/signup', form({ name: 'Out Sider', email: 'x@gmail.com', password: 'longenough123', whatsapp: '+14155550100' }));
   assert.equal(res.status, 400);
-  assert.match(await res.text(), /tryperdiem\.com/);
+  assert.match(await res.text(), /example\.com/);
 
-  res = await post('/signup', form({ name: 'Ana', email: 'ana@tryperdiem.com', password: 'short', whatsapp: '+14155550100' }));
+  res = await post('/signup', form({ name: 'Ana', email: 'ana@example.com', password: 'short', whatsapp: '+14155550100' }));
   assert.equal(res.status, 400);
 
-  res = await post('/signup', form({ name: 'Ana Admin', email: 'ana@tryperdiem.com', password: 'longenough123', slack: 'U0ANA12345', whatsapp: '(415) 555-0100' }));
+  res = await post('/signup', form({ name: 'Ana Admin', email: 'ana@example.com', password: 'longenough123', slack: 'U0ANA12345', whatsapp: '(415) 555-0100' }));
   assert.equal(res.status, 303);
   const cookie = cookieOf(res);
   assert.ok(cookie);
-  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@tryperdiem.com'");
+  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@example.com'");
   assert.equal(ana.is_admin, 1);
   assert.equal(ana.whatsapp, '+14155550100');
   assert.equal(ana.slack_user_id, 'U0ANA12345');
@@ -56,14 +56,14 @@ test('signup validates input and the first user becomes admin', async () => {
   assert.equal(home.status, 200);
   assert.match(await home.text(), /Weekend rotation/);
 
-  res = await post('/signup', form({ name: 'Ben', email: 'ben@tryperdiem.com', password: 'longenough123', slack: 'U0BEN12345', whatsapp: '+14155550101' }));
-  assert.equal((await app.db.get("SELECT is_admin FROM users WHERE email = 'ben@tryperdiem.com'")).is_admin, 0);
+  res = await post('/signup', form({ name: 'Ben', email: 'ben@example.com', password: 'longenough123', slack: 'U0BEN12345', whatsapp: '+14155550101' }));
+  assert.equal((await app.db.get("SELECT is_admin FROM users WHERE email = 'ben@example.com'")).is_admin, 0);
 });
 
 test('login rejects a wrong password and accepts the right one', async () => {
-  let res = await post('/login', form({ email: 'ana@tryperdiem.com', password: 'nope' }));
+  let res = await post('/login', form({ email: 'ana@example.com', password: 'nope' }));
   assert.equal(res.status, 400);
-  res = await post('/login', form({ email: 'ANA@tryperdiem.com', password: 'longenough123' }));
+  res = await post('/login', form({ email: 'ANA@example.com', password: 'longenough123' }));
   assert.equal(res.status, 303);
   assert.ok(cookieOf(res));
 });
@@ -119,4 +119,26 @@ test('ack link: GET only shows a button, POST with the token acknowledges', asyn
   res = await post(`/ack/${inc.id}`, form({ t: inc.ack_token }));
   assert.equal(res.status, 200);
   assert.equal((await app.incidents.get(inc.id)).status, 'acknowledged');
+});
+
+test('Slack requests from another workspace are rejected when SLACK_TEAM_ID is set', async () => {
+  const { config } = await import('../src/config.js');
+  config.slack.teamId = 'T0OURTEAM';
+  const signed = (body) => {
+    const ts = String(Math.floor(Date.now() / 1000));
+    const sig = 'v0=' + crypto.createHmac('sha256', 'slack-secret').update(`v0:${ts}:${body}`).digest('hex');
+    return post('/slack/commands', body, { 'x-slack-request-timestamp': ts, 'x-slack-signature': sig });
+  };
+  try {
+    assert.equal((await signed(form({ command: '/oncall', team_id: 'T0OTHER' }))).status, 403);
+    assert.equal((await signed(form({ command: '/oncall', team_id: 'T0OURTEAM' }))).status, 200);
+  } finally {
+    config.slack.teamId = '';
+  }
+});
+
+test('on-call API does not leak names without the API token', async () => {
+  assert.equal((await fetch(`${base}/api/oncall`)).status, 401);
+  const res = await fetch(`${base}/api/oncall`, { headers: { Authorization: 'Bearer test-api-token' } });
+  assert.equal(res.status, 200);
 });

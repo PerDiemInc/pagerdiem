@@ -78,10 +78,10 @@ export function layout({ title, user, body, flash, active }) {
     : '<nav></nav>';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)} · PagerDiem</title>
+<title>${esc(title)} · ${esc(config.appName)}</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📟</text></svg>">
 <style>${CSS}</style></head><body>
-<header><div class="bar"><a class="brand" href="/"><i>P</i>PagerDiem</a>${nav}</div></header>
+<header><div class="bar"><a class="brand" href="/"><i>${esc(config.appName[0] || 'P')}</i>${esc(config.appName)}</a>${nav}</div></header>
 <main>${flash ? flashBox(flash) : ''}${body}</main>
 ${flash?.undo ? '<script src="/undo.js"></script>' : ''}
 </body></html>`;
@@ -127,17 +127,17 @@ export function authPage({ mode, values = {}, error, domains, google, notConfigu
   const only = domains.length ? `@${domains.map(esc).join(' / @')}` : '';
   const body = notConfigured
     ? `<div class="auth card"><h1>PagerDiem</h1>
-  <p>Sign-in isn't set up yet. An admin needs to add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> so only Per Diem Google accounts can get in.</p></div>`
+  <p>Sign-in isn't set up yet. An admin needs to add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> so only your team's Google accounts can get in.</p></div>`
     : google
     ? `<div class="auth card">
-  <h1>PagerDiem</h1>
-  <p class="muted">Weekend on-call for the Per Diem engineering team.</p>
+  <h1>${esc(config.appName)}</h1>
+  <p class="muted">Weekend on-call for ${esc(config.teamName)}.</p>
   ${error ? `<div class="flash error">${esc(error)}</div>` : ''}
   <p><a class="btn" href="/auth/google" style="display:flex;gap:10px;align-items:center;justify-content:center">${GOOGLE_ICON} Sign in with Google</a></p>
   ${only ? `<p class="small muted">Only ${only} Google accounts can sign in. First time? Sign in and you'll be asked for your Slack and WhatsApp.</p>` : ''}
 </div>`
     : `<div class="auth card">
-  <h1>${signup ? 'Join the Per Diem on-call rotation' : 'Log in'}</h1>
+  <h1>${signup ? `Join the ${esc(config.teamName)} on-call rotation` : 'Log in'}</h1>
   ${error ? `<div class="flash error">${esc(error)}</div>` : ''}
   <form method="post" action="/${mode}">
     ${signup ? `<label for="name">Full name</label><input id="name" name="name" required value="${esc(values.name)}" autocomplete="name">` : ''}

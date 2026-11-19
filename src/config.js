@@ -25,9 +25,9 @@ if (isProd && !env.SESSION_SECRET) {
   throw new Error('SESSION_SECRET is required in production');
 }
 
-// PagerDiem is for the Per Diem team only: production must name the allowed email domain(s).
-if (isProd && !(env.ALLOWED_EMAIL_DOMAINS ?? 'tryperdiem.com').trim()) {
-  throw new Error('ALLOWED_EMAIL_DOMAINS must be set in production (e.g. tryperdiem.com)');
+// The app is for one company's team: production must name the allowed email domain(s).
+if (isProd && !(env.ALLOWED_EMAIL_DOMAINS || '').trim()) {
+  throw new Error('ALLOWED_EMAIL_DOMAINS must be set in production (e.g. yourcompany.com)');
 }
 
 export const config = {
@@ -40,12 +40,15 @@ export const config = {
   // Postgres URL in production (e.g. Neon); otherwise a local SQLite file.
   database: env.DATABASE_URL || env.DATABASE_PATH || 'data/pagerdiem.db',
   isProd,
+  // Branding: shown in the header, sign-in page and calendar feed.
+  appName: env.APP_NAME || 'PagerDiem',
+  teamName: env.TEAM_NAME || 'the team',
   // A random secret is fine locally; sessions just reset when the server restarts.
   sessionSecret: env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
 
   // Only Google Workspace accounts on these domains can sign in (comma-separated).
   // Empty = anyone, which is allowed only for local development.
-  allowedEmailDomains: (env.ALLOWED_EMAIL_DOMAINS ?? 'tryperdiem.com')
+  allowedEmailDomains: (env.ALLOWED_EMAIL_DOMAINS || '')
     .split(',').map((d) => d.trim().toLowerCase()).filter(Boolean),
 
   // The weekend shift, in the team's time zone.
@@ -72,6 +75,8 @@ export const config = {
     botToken: env.SLACK_BOT_TOKEN || '',
     signingSecret: env.SLACK_SIGNING_SECRET || '',
     channel: env.SLACK_ONCALL_CHANNEL || '', // channel ID, e.g. C0123456789
+    // Only accept slash commands / button clicks from this Slack workspace (team ID, e.g. T0123456).
+    teamId: env.SLACK_TEAM_ID || '',
   },
 
   // Team WhatsApp group invite link, shown to signed-in teammates as a "Join" button.
