@@ -59,8 +59,9 @@ export function makeIncidents({ db, rotation, notify }) {
     details = String(details || '').trim().slice(0, 4000);
 
     const onCall = await rotation.onCallNow(now);
-    const assigned = onCall?.user ?? null;
-    const backup = onCall ? await rotation.backupFor(onCall.shift) : null;
+    const people = onCall?.people ?? [];
+    const assigned = people[0] ?? null; // shown as "on call"; everyone in `people` is paged
+    const backup = people.length ? await rotation.backupFor(onCall.shift) : null;
     const iso = now.toISOString();
 
     const { id: newId } = (await db.get(`
@@ -72,11 +73,11 @@ export function makeIncidents({ db, rotation, notify }) {
     const creator = await userById(createdBy);
     await event(inc.id, `Triggered via ${source}${creator ? ` by ${creator.name}` : ''}`, now);
 
-    if (assigned) {
-      await event(inc.id, `Paged ${assigned.name} (on call)`, now);
-      await page(inc, assigned, 'You are on call. Please acknowledge.');
+    if (people.length) {
+      await event(inc.id, `Paged ${people.map((p) => p.name).join(' and ')} (on call)`, now);
+      for (const p of people) await page(inc, p, 'You are on call. Please acknowledge.');
       await notify.channel({
-        text: `:rotating_light: Incident #${inc.id}: *${inc.title}* — paging ${mention(assigned)} (on call). ${incUrl(inc)}`,
+        text: `:rotating_light: Incident #${inc.id}: *${inc.title}* — paging ${people.map(mention).join(' and ')} (on call). ${incUrl(inc)}`,
         incidentId: inc.id,
       });
     } else {
@@ -125,6 +126,10 @@ export function makeIncidents({ db, rotation, notify }) {
       const sincePage = now - new Date(inc.last_paged_at);
       const assigned = await userById(inc.assigned_user_id);
       const backup = await userById(inc.backup_user_id);
+      // Everyone on call that weekend (including anyone who added themselves since).
+      const onCallThen = await rotation.onCallNow(new Date(inc.created_at));
+      const onCallPeople = onCallThen?.people?.length ? onCallThen.people : [assigned].filter(Boolean);
+      const names = onCallPeople.map((p) => p.name).join(' and ') || 'The on-call';
       const minutes = Math.round(age / MINUTE);
 
       const escalateAfter = config.escalateAfterMinutes * MINUTE;
@@ -145,10 +150,10 @@ export function makeIncidents({ db, rotation, notify }) {
         if (!backup) { await alertWholeChannel(); continue; }
         (await db.run('UPDATE incidents SET escalation_level = 1, last_paged_at = ? WHERE id = ?', [now.toISOString(), inc.id]));
         await event(inc.id, `Not acknowledged after ${minutes} min — escalated to ${backup.name} (backup)`, now);
-        await page(inc, backup, `${assigned?.name ?? 'The on-call'} hasn't acknowledged in ${minutes} min. You're the backup.`);
-        if (assigned) await page(inc, assigned, `Still not acknowledged after ${minutes} min — escalated to ${backup.name}.`);
+        await page(inc, backup, `${names} hasn't acknowledged in ${minutes} min. You're the backup.`);
+        for (const p of onCallPeople) await page(inc, p, `Still not acknowledged after ${minutes} min — escalated to ${backup.name}.`);
         await notify.channel({
-          text: `:warning: Incident #${inc.id} *${inc.title}* not acknowledged by ${mention(assigned)} after ${minutes} min — ` +
+          text: `:warning: Incident #${inc.id} *${inc.title}* not acknowledged by ${onCallPeople.map(mention).join(' or ')} after ${minutes} min — ` +
             `escalating to ${mention(backup)}.`,
           incidentId: inc.id,
         });
@@ -161,7 +166,7 @@ export function makeIncidents({ db, rotation, notify }) {
       // In between: keep re-paging whoever is currently responsible.
       if (sincePage >= config.repageEveryMinutes * MINUTE) {
         (await db.run('UPDATE incidents SET last_paged_at = ? WHERE id = ?', [now.toISOString(), inc.id]));
-        const targets = inc.escalation_level === 0 ? [assigned] : [assigned, backup];
+        const targets = inc.escalation_level === 0 ? onCallPeople : [...onCallPeople, backup];
         for (const u of targets.filter(Boolean)) {
           await event(inc.id, `Re-paged ${u.name}`, now);
           await page(inc, u, `Reminder: still not acknowledged after ${minutes} min.`);

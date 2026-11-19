@@ -53,6 +53,8 @@ export const config = {
   shiftStart: parseDayTime(env.SHIFT_START || 'FRI 18:00'),
   shiftEnd: parseDayTime(env.SHIFT_END || 'MON 09:00'),
   reminderHoursBefore: int('REMINDER_HOURS_BEFORE', 24),
+  // How many people the rotation puts on each weekend (anyone can add themselves on top).
+  perWeekend: int('PEOPLE_PER_WEEKEND', 2),
 
   // Escalation: page the on-call, then the backup, then the whole channel.
   escalateAfterMinutes: int('ESCALATE_AFTER_MINUTES', 15),

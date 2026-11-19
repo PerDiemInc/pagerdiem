@@ -71,6 +71,42 @@ CREATE TABLE IF NOT EXISTS notifications (
   error        TEXT,
   incident_id  INTEGER REFERENCES incidents(id)
 );
+-- The people the rotation picked for a weekend, frozen when the weekend starts.
+CREATE TABLE IF NOT EXISTS shift_people (
+  weekend_key  TEXT NOT NULL,
+  position     INTEGER NOT NULL,
+  user_id      INTEGER NOT NULL REFERENCES users(id),
+  PRIMARY KEY (weekend_key, position)
+);
+-- People who added ('in') or removed ('out') themselves for a weekend: latest state.
+CREATE TABLE IF NOT EXISTS weekend_members (
+  weekend_key  TEXT NOT NULL,
+  user_id      INTEGER NOT NULL REFERENCES users(id),
+  status       TEXT NOT NULL CHECK (status IN ('in','out')),
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (weekend_key, user_id)
+);
+-- Public history of every add/remove, visible to the whole team.
+CREATE TABLE IF NOT EXISTS roster_log (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  at           TEXT NOT NULL,
+  weekend_key  TEXT NOT NULL,
+  user_id      INTEGER NOT NULL REFERENCES users(id),
+  action       TEXT NOT NULL CHECK (action IN ('join','leave'))
+);
+-- "Take their spot" swaps from the calendar. Undoable by the swapper for 10 seconds;
+-- announced (notified_at) only after that window passes without an undo.
+CREATE TABLE IF NOT EXISTS swaps (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  at                    TEXT NOT NULL,
+  weekend_key           TEXT NOT NULL,
+  by_user_id            INTEGER NOT NULL REFERENCES users(id),
+  replaced_user_id      INTEGER NOT NULL REFERENCES users(id),
+  prev_by_status        TEXT,
+  prev_replaced_status  TEXT,
+  undone_at             TEXT,
+  notified_at           TEXT
+);
 CREATE TABLE IF NOT EXISTS settings (
   key    TEXT PRIMARY KEY,
   value  TEXT NOT NULL

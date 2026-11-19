@@ -132,13 +132,13 @@ test('Google callback rejects a forged state', async () => {
 test('month calendar marks each weekend with the rotation', async () => {
   const grid = await calendar.monthGrid({ shifts: app.shifts, rotation: app.rotation }, 2026, 12);
   const byKey = Object.fromEntries(grid.weeks.flat().map((d) => [d.key, d]));
-  assert.equal(byKey['2026-12-04'].entry.user.name, 'Ana Admin'); // Nov 20 Ana, Nov 27 Ben, Dec 4 Ana
+  // Ana is the admin (optional), so the rotation only has Ben: every weekend is Ben + needs cover.
+  assert.deepEqual(byKey['2026-12-04'].entry.people.map((p) => p.name), ['Ben']);
+  assert.ok(byKey['2026-12-04'].entry.needsCover);
   assert.ok(byKey['2026-12-04'].isStart);
-  assert.equal(byKey['2026-12-07'].entry.user.name, 'Ana Admin');
   assert.ok(byKey['2026-12-07'].isEnd, 'Monday morning is the end of the shift');
   assert.equal(byKey['2026-12-08'].entry, null, 'Tuesday is not on call');
-  assert.equal(byKey['2026-12-11'].entry.user.name, 'Ben');
-  assert.deepEqual(grid.entries.map((e) => e.user.name), ['Ana Admin', 'Ben', 'Ana Admin', 'Ben']);
+  assert.equal(grid.entries.length, 4);
 });
 
 test('calendar feed needs the secret token and lists weekends', async () => {
@@ -148,6 +148,30 @@ test('calendar feed needs the secret token and lists weekends', async () => {
   assert.match(res.headers.get('content-type'), /text\/calendar/);
   const ics = await res.text();
   assert.match(ics, /BEGIN:VCALENDAR/);
-  assert.match(ics, /SUMMARY:📟 On call: Ana Admin/);
+  assert.match(ics, /SUMMARY:📟 On call: Ben/);
   assert.match(ics, /DTSTART:20261204T230000Z/);
+});
+
+test('weekend add/remove only ever changes the signed-in user, and the log is visible to the team', async () => {
+  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@tryperdiem.com'");
+  const { sessionCookie } = await import('../src/auth.js');
+  const cookie = sessionCookie(ana.id).split(';')[0];
+  const post = (path, body = '') => fetch(`${base}${path}`, { method: 'POST', redirect: 'manual', body,
+    headers: { cookie, 'Content-Type': 'application/x-www-form-urlencoded' } });
+
+  // Even if someone sends another user's id, the change applies to the signed-in user only.
+  const ben = await app.db.get("SELECT * FROM users WHERE email = 'ben@tryperdiem.com'");
+  let res = await post('/weekends/2026-12-04/join', `user_id=${ben.id}`);
+  assert.equal(res.status, 303);
+  let e = await app.rotation.forShift(app.shifts.forKey('2026-12-04'));
+  assert.deepEqual(e.people.map((p) => p.name), ['Ben', 'Ana Admin']);
+
+  res = await post('/weekends/2026-12-04/leave', `user_id=${ben.id}`);
+  e = await app.rotation.forShift(app.shifts.forKey('2026-12-04'));
+  assert.deepEqual(e.people.map((p) => p.name), ['Ben'], 'Ana removed herself; Ben untouched');
+
+  const log = await (await fetch(`${base}/log`, { headers: { cookie } })).text();
+  assert.match(log, /Ana Admin<\/strong>\s*added themselves/);
+  assert.match(log, /Ana Admin<\/strong>\s*removed themselves/);
+  assert.equal((await fetch(`${base}/log`, { redirect: 'manual' })).status, 303, 'log needs a Per Diem sign-in');
 });

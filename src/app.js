@@ -23,7 +23,7 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function createApp({ db, notifierOverrides } = {}) {
   const shifts = makeShifts(config);
-  const rotation = makeRotation(db, shifts);
+  const rotation = makeRotation(db, shifts, { perWeekend: config.perWeekend });
   const notify = makeNotifier(db, notifierOverrides);
   const incidents = makeIncidents({ db, rotation, notify });
   const scheduler = makeScheduler({ db, shifts, rotation, notify, incidents });
@@ -54,8 +54,8 @@ export function createApp({ db, notifierOverrides } = {}) {
     }
   }
 
-  function setFlash(r, type, message) {
-    r.cookie(`pd_flash=${encodeURIComponent(JSON.stringify({ type, message }))}; Path=/; HttpOnly; SameSite=Lax; Max-Age=60`);
+  function setFlash(r, type, message, extra = {}) {
+    r.cookie(`pd_flash=${encodeURIComponent(JSON.stringify({ type, message, ...extra }))}; Path=/; HttpOnly; SameSite=Lax; Max-Age=60`);
   }
   function takeFlash(ctx) {
     const raw = parseCookies(ctx.req.headers.cookie).pd_flash;
@@ -250,49 +250,98 @@ export function createApp({ db, notifierOverrides } = {}) {
   router.get('/', async (ctx) => {
     if (!requireUser(ctx)) return;
     const now = new Date();
-    const onCall = (await rotation.onCallNow(now));
-    const first = shifts.currentOrNext(now);
-    const schedule = (await rotation.schedule(first, 10));
+    const onCall = await rotation.onCallNow(now);
+    const schedule = await rotation.schedule(shifts.currentOrNext(now), 12);
     ctx.r.html(views.dashboardPage({
-      user: ctx.user, now, onCall,
+      user: ctx.user, now, onCall: onCall?.people.length ? onCall : null,
       nextEntry: onCall ? null : schedule[0],
-      backup: onCall ? (await rotation.backupFor(onCall.shift)) : null,
+      backup: onCall?.people.length ? await rotation.backupFor(onCall.shift) : null,
       schedule,
-      members: (await rotation.activeMembers()),
+      perWeekend: rotation.perWeekend,
+      balance: await rotation.balance(schedule),
+      recentLog: await rotation.log({ limit: 8 }),
       openIncidents: (await incidents.list()).filter((i) => i.status !== 'resolved'),
       flash: takeFlash(ctx),
     }));
   });
 
-  router.post('/schedule/:key/override', async (ctx) => {
-    if (!requireUser(ctx)) return;
-    const { key } = ctx.params;
-    parseKey(key);
-    const shift = shifts.forKey(key);
-    if (shift.end <= new Date()) throw new HttpError(400, 'That weekend is already over');
-    const target = (await rotation.userById(Number(ctx.body.user_id)));
-    if (!target?.active) throw new HttpError(400, 'Pick someone in the rotation');
-    const before = (await rotation.forShift(shift)).user;
-    if (before?.id === target.id) { ctx.r.redirect('/'); return; }
-    (await rotation.setOverride(key, target.id, ctx.user.id));
-    const range = formatRange(shift, config.timezone);
-    await notify.user(target, {
-      text: `:repeat: ${ctx.user.name} put you on call for the weekend of ${range} (${fmt(shift.start)} → ${fmt(shift.end)}).`,
-    });
-    if (before && before.id !== ctx.user.id) {
-      await notify.user(before, { text: `:repeat: ${ctx.user.name} swapped your weekend of ${range} to ${target.name}. You're off the hook.` });
-    }
-    await notify.channel({ text: `:repeat: Weekend of ${range}: ${mention(target)} is covering for ${mention(before)} (swapped by ${ctx.user.name}).` });
-    setFlash(ctx.r, 'ok', `${target.name} now covers ${range}.`);
-    ctx.r.redirect('/');
-  });
-
-  router.post('/schedule/:key/override/clear', async (ctx) => {
+  // Add or remove YOURSELF for a weekend. There is deliberately no way to change anyone else.
+  async function rosterChange(ctx, action) {
     if (!requireUser(ctx)) return;
     parseKey(ctx.params.key);
-    (await rotation.clearOverride(ctx.params.key));
-    setFlash(ctx.r, 'ok', 'Swap undone.');
-    ctx.r.redirect('/');
+    const shift = shifts.forKey(ctx.params.key);
+    const fn = action === 'join' ? rotation.join : rotation.leave;
+    let result;
+    try {
+      result = await fn(shift, ctx.user);
+    } catch (err) {
+      throw new HttpError(err.status || 500, err.message);
+    }
+    const range = formatRange(shift, config.timezone);
+    if (result.changed) {
+      const { entry } = result;
+      const short = entry.needsCover ? ` :warning: Now ${entry.people.length}/${rotation.perWeekend} — needs cover.` : '';
+      await notify.channel({
+        text: action === 'join'
+          ? `:raised_hand: ${mention(ctx.user)} added themselves to the weekend of ${range}. On call: ${entry.people.map((p) => p.name).join(', ')}.`
+          : `:wave: ${mention(ctx.user)} removed themselves from the weekend of ${range}. On call: ${entry.people.map((p) => p.name).join(', ') || 'nobody'}.${short}`,
+      });
+      setFlash(ctx.r, 'ok', action === 'join' ? `You're on call for ${range}.` : `You're off ${range}.${entry.needsCover ? ' That weekend now needs cover.' : ''}`);
+    }
+    ctx.r.redirect(ctx.body.back === 'calendar' ? `/calendar?month=${ctx.params.key.slice(0, 7)}` : '/');
+  }
+  router.post('/weekends/:key/join', (ctx) => rosterChange(ctx, 'join'));
+  router.post('/weekends/:key/leave', (ctx) => rosterChange(ctx, 'leave'));
+
+  // "Take their spot": you're in, they're out. Undoable by you for 10 seconds; Slack and the
+  // replaced person hear about it only after that window passes (see announceSwaps).
+  router.post('/weekends/:key/swap', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    parseKey(ctx.params.key);
+    const shift = shifts.forKey(ctx.params.key);
+    const replaced = await rotation.userById(Number(ctx.body.user_id));
+    if (!replaced) throw new HttpError(400, 'Pick someone on that weekend.');
+    let row;
+    try {
+      row = await rotation.swap(shift, ctx.user, replaced.id);
+    } catch (err) {
+      throw new HttpError(err.status || 500, err.message);
+    }
+    setTimeout(() => announceSwaps().catch((err) => console.error('announce swaps failed:', err)), rotation.UNDO_MS + 2_500).unref?.();
+    setFlash(ctx.r, 'ok', `You took ${replaced.name}'s spot for ${formatRange(shift, config.timezone)}.`,
+      { undo: { id: row.id, until: new Date(row.at).getTime() + rotation.UNDO_MS } });
+    ctx.r.redirect(`/calendar?month=${ctx.params.key.slice(0, 7)}`);
+  });
+
+  router.post('/swaps/:id/undo', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    let undone;
+    try {
+      undone = await rotation.undoSwap(Number(ctx.params.id), ctx.user);
+    } catch (err) {
+      setFlash(ctx.r, 'error', err.message);
+      return ctx.r.redirect(ctx.body.back || '/calendar');
+    }
+    setFlash(ctx.r, 'ok', undone ? 'Swap undone. Nothing changed and nobody was notified.' : 'Already undone.');
+    ctx.r.redirect(ctx.body.back || '/calendar');
+  });
+
+  /** Tell Slack and the replaced person about swaps whose undo window has passed. */
+  async function announceSwaps(now = new Date()) {
+    for (const s of await rotation.claimSwapsToAnnounce(now)) {
+      const shift = shifts.forKey(s.weekend_key);
+      const by = await rotation.userById(s.by_user_id);
+      const replaced = await rotation.userById(s.replaced_user_id);
+      const range = formatRange(shift, config.timezone);
+      await notify.user(replaced, { text: `:repeat: ${by.name} took your on-call spot for the weekend of ${range}. You're off that weekend.` });
+      await notify.channel({ text: `:repeat: ${mention(by)} took ${mention(replaced)}'s spot for the weekend of ${range}.` });
+    }
+  }
+
+  // Public (to everyone signed in) history of who added or removed themselves.
+  router.get('/log', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    ctx.r.html(views.logPage({ user: ctx.user, log: await rotation.log({ limit: 1000 }), flash: takeFlash(ctx) }));
   });
 
   // ---------- calendar ----------
@@ -310,6 +359,7 @@ export function createApp({ db, notifierOverrides } = {}) {
       grid: await calendar.monthGrid({ shifts, rotation }, year, month),
       prevMonth: prev, nextMonth: next, thisMonth: ym(today.year, today.month),
       feedUrl: `${config.publicUrl}/calendar.ics?token=${calendar.feedToken()}`,
+      perWeekend: rotation.perWeekend,
       flash: takeFlash(ctx),
     }));
   });
@@ -476,17 +526,19 @@ export function createApp({ db, notifierOverrides } = {}) {
 
   async function onCallSummary() {
     const now = new Date();
-    const onCall = (await rotation.onCallNow(now));
-    const upcoming = (await rotation.schedule(onCall ? shifts.next(now) : shifts.currentOrNext(now), 4));
+    const onCall = await rotation.onCallNow(now);
+    const upcoming = await rotation.schedule(onCall ? shifts.next(now) : shifts.currentOrNext(now), 4);
     const lines = [];
-    if (onCall) {
-      const backup = (await rotation.backupFor(onCall.shift));
-      lines.push(`:pager: *On call now:* ${mention(onCall.user)} until ${fmt(onCall.shift.end)}${backup ? ` (backup ${mention(backup)})` : ''}`);
+    if (onCall?.people.length) {
+      const backup = await rotation.backupFor(onCall.shift);
+      lines.push(`:pager: *On call now:* ${onCall.people.map(mention).join(' and ')} until ${fmt(onCall.shift.end)}${backup ? ` (backup ${mention(backup)})` : ''}`);
     } else {
-      lines.push(':zzz: Nobody is on call right now (weekday). `/page` alerts the whole channel.');
+      lines.push(':zzz: Nobody is on call right now. `/page` alerts the whole channel.');
     }
     lines.push('*Upcoming weekends:*');
-    for (const e of upcoming) lines.push(`• ${formatRange(e.shift, config.timezone)}: ${e.user ? e.user.name : 'nobody'}`);
+    for (const e of upcoming) {
+      lines.push(`• ${formatRange(e.shift, config.timezone)}: ${e.people.map((p) => p.name).join(', ') || 'nobody'}${e.needsCover ? ' — :warning: needs cover' : ''}`);
+    }
     lines.push(`<${config.publicUrl}/|Open PagerDiem>`);
     return lines.join('\n');
   }
@@ -505,7 +557,7 @@ export function createApp({ db, notifierOverrides } = {}) {
         .catch((err) => console.error('slack /page failed:', err));
       return ctx.r.json({
         response_type: 'in_channel',
-        text: onCall ? `:rotating_light: Paging ${mention(onCall.user)}: *${what}*` : `:rotating_light: *${what}* — nobody is on call, alerting the channel.`,
+        text: onCall?.people.length ? `:rotating_light: Paging ${onCall.people.map(mention).join(' and ')}: *${what}*` : `:rotating_light: *${what}* — nobody is on call, alerting the channel.`,
       });
     }
     return ctx.r.json({ response_type: 'ephemeral', text: (await onCallSummary()) });
@@ -562,7 +614,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     }
     if (['WHO', 'ONCALL', 'STATUS'].includes(word)) {
       const onCall = (await rotation.onCallNow());
-      return reply(onCall ? `📟 ${onCall.user.name} is on call until ${fmt(onCall.shift.end)}.` : '💤 Nobody is on call right now.');
+      return reply(onCall?.people.length ? `📟 ${onCall.people.map((p) => p.name).join(' and ')} on call until ${fmt(onCall.shift.end)}.` : '💤 Nobody is on call right now.');
     }
     return reply('PagerDiem commands: ACK, RESOLVE, WHO');
   });
@@ -580,11 +632,13 @@ export function createApp({ db, notifierOverrides } = {}) {
   router.get('/api/oncall', async (ctx) => {
     const onCall = (await rotation.onCallNow());
     ctx.r.json({
-      on_call: onCall ? { name: onCall.user.name, until: onCall.shift.end.toISOString() } : null,
+      on_call: onCall?.people.length ? { names: onCall.people.map((p) => p.name), until: onCall.shift.end.toISOString() } : null,
       next: (await rotation.schedule(onCall ? shifts.next(new Date()) : shifts.currentOrNext(new Date()), 1))
-        .map((e) => ({ name: e.user?.name ?? null, starts: e.shift.start.toISOString() }))[0],
+        .map((e) => ({ names: e.people.map((p) => p.name), starts: e.shift.start.toISOString() }))[0],
     });
   });
+
+  router.get('/undo.js', async (ctx) => ctx.r.script(views.UNDO_SCRIPT));
 
   router.get('/healthz', async (ctx) => ctx.r.json({ ok: true }));
 
@@ -615,5 +669,6 @@ export function createApp({ db, notifierOverrides } = {}) {
   }
 
   const server = http.createServer(handle);
-  return { server, scheduler, rotation, incidents, shifts, relinkSlackUsers, db };
+  scheduler.addStep?.(announceSwaps);
+  return { server, scheduler, rotation, announceSwaps, incidents, shifts, relinkSlackUsers, db };
 }

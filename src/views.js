@@ -64,6 +64,7 @@ code{background:var(--chip);padding:1px 6px;border-radius:5px;font-size:13px;wor
 .oc{display:block;margin-top:6px;padding:4px 6px;border-radius:6px;font-size:12px;font-weight:600;line-height:1.3;
 background:hsl(var(--h) 75% 91%);color:hsl(var(--h) 60% 25%);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .oc small{display:block;font-weight:500;opacity:.8}
+.oc.need{background:var(--bad-bg);color:var(--bad)}
 @media (prefers-color-scheme:dark){.oc{background:hsl(var(--h) 35% 22%);color:hsl(var(--h) 70% 85%)}}
 .swatch{display:inline-block;width:12px;height:12px;border-radius:3px;background:hsl(var(--h) 70% 60%);margin-right:6px;vertical-align:-1px}
 @media (max-width:640px){.cal>div{min-height:64px;padding:3px}.oc{font-size:10px;padding:2px 3px}.oc small{display:none}}
@@ -72,7 +73,7 @@ background:hsl(var(--h) 75% 91%);color:hsl(var(--h) 60% 25%);overflow:hidden;tex
 export function layout({ title, user, body, flash, active }) {
   const link = (href, label, key) => `<a href="${href}" class="${active === key ? 'on' : ''}">${label}</a>`;
   const nav = user
-    ? `<nav>${link('/', 'On call', 'home')}${link('/calendar', 'Calendar', 'calendar')}${link('/incidents', 'Incidents', 'incidents')}${link('/team', 'Team', 'team')}${link('/settings', 'Settings', 'settings')}</nav>
+    ? `<nav>${link('/', 'On call', 'home')}${link('/calendar', 'Calendar', 'calendar')}${link('/log', 'Audit log', 'log')}${link('/incidents', 'Incidents', 'incidents')}${link('/team', 'Team', 'team')}${link('/settings', 'Settings', 'settings')}</nav>
        <div class="row small"><span class="muted">${esc(user.name)}</span><form method="post" action="/logout" class="inline"><button class="sm">Log out</button></form></div>`
     : '<nav></nav>';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -81,9 +82,33 @@ export function layout({ title, user, body, flash, active }) {
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📟</text></svg>">
 <style>${CSS}</style></head><body>
 <header><div class="bar"><a class="brand" href="/"><i>P</i>PagerDiem</a>${nav}</div></header>
-<main>${flash ? `<div class="flash ${flash.type === 'error' ? 'error' : ''}">${esc(flash.message)}</div>` : ''}${body}</main>
+<main>${flash ? flashBox(flash) : ''}${body}</main>
+${flash?.undo ? '<script src="/undo.js"></script>' : ''}
 </body></html>`;
 }
+
+function flashBox(flash) {
+  const undo = flash.undo && Number(flash.undo.until) > Date.now()
+    ? `<form method="post" action="/swaps/${Number(flash.undo.id)}/undo" class="inline" data-undo-until="${Number(flash.undo.until)}" style="margin-left:auto">
+        <button class="sm">Undo (<span data-undo-left>10</span>s)</button></form>`
+    : '';
+  return `<div class="flash ${flash.type === 'error' ? 'error' : ''} row">${esc(flash.message)}${undo}</div>`;
+}
+
+// Counts the Undo button down and removes it when the 10 seconds are up.
+export const UNDO_SCRIPT = `
+document.querySelectorAll('[data-undo-until]').forEach(function (form) {
+  var until = Number(form.getAttribute('data-undo-until'));
+  var label = form.querySelector('[data-undo-left]');
+  function tick() {
+    var left = Math.ceil((until - Date.now()) / 1000);
+    if (left <= 0) { form.remove(); return; }
+    label.textContent = left;
+    setTimeout(tick, 250);
+  }
+  tick();
+});
+`;
 
 const initials = (name) => esc(String(name || '?').split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase());
 
@@ -147,41 +172,56 @@ function personCell(u, extra = '') {
   return `<div class="row"><span class="avatar" style="width:30px;height:30px;font-size:12px">${initials(u.name)}</span><span>${esc(u.name)}${extra}</span></div>`;
 }
 
-export function dashboardPage({ user, now, onCall, nextEntry, backup, schedule, members, openIncidents, flash }) {
+const names = (people) => people.map((p) => esc(p.name)).join(' & ');
+
+/** "Add me" / "Remove me" for the signed-in user only. */
+function selfButton(user, e, back = '') {
+  if (e.shift.end <= new Date()) return '';
+  const on = e.people.some((p) => p.id === user.id);
+  const hidden = back ? `<input type="hidden" name="back" value="${back}">` : '';
+  return on
+    ? `<form method="post" action="/weekends/${e.shift.key}/leave" class="inline">${hidden}<button class="sm">Remove me</button></form>`
+    : `<form method="post" action="/weekends/${e.shift.key}/join" class="inline">${hidden}<button class="sm primary">Add me</button></form>`;
+}
+
+function peopleCell(e, perWeekend) {
+  const chips = e.people.map((p) => `<span class="row" style="gap:6px"><span class="avatar" style="width:26px;height:26px;font-size:11px">${initials(p.name)}</span>${esc(p.name)}${
+    e.joined.includes(p.id) ? ' <span class="pill">added themselves</span>' : ''}</span>`).join('');
+  const cover = e.needsCover
+    ? ` <span class="pill open">needs ${perWeekend - e.people.length} more</span>` : '';
+  return `<div class="row" style="gap:12px">${chips || '<span class="muted">Nobody yet</span>'}${cover}</div>`;
+}
+
+export function dashboardPage({ user, now, onCall, nextEntry, backup, schedule, perWeekend, balance, recentLog, openIncidents, flash }) {
   const tz = config.timezone;
   const hero = onCall
-    ? `<div class="hero"><div class="avatar">${initials(onCall.user.name)}</div><div>
-        <div class="muted small">On call right now</div><div class="big">${esc(onCall.user.name)}</div>
+    ? `<div class="hero"><div class="avatar">📟</div><div>
+        <div class="muted small">On call right now</div><div class="big">${names(onCall.people)}</div>
         <div class="muted small">Until ${esc(fmt(onCall.shift.end))}${backup ? ` · backup ${esc(backup.name)}` : ''}</div></div></div>`
     : `<div class="hero"><div class="avatar">💤</div><div>
         <div class="muted small">Nobody is on call right now — it's a weekday</div>
-        <div class="big">${nextEntry?.user ? `Next: ${esc(nextEntry.user.name)}` : 'No one scheduled'}</div>
+        <div class="big">${nextEntry?.people.length ? `Next: ${names(nextEntry.people)}` : 'Next weekend needs cover'}</div>
         <div class="muted small">${nextEntry ? `Starts ${esc(fmt(nextEntry.shift.start))}` : ''}</div></div></div>`;
 
-  const options = (selectedId) => members.map((m) =>
-    `<option value="${m.id}" ${m.id === selectedId ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
-
-  const rows = schedule.map((e, i) => {
+  const rows = schedule.map((e) => {
     const isNow = onCall && e.shift.key === onCall.shift.key;
-    const swapped = e.user && e.base && e.user.id !== e.base.id;
     return `<tr class="${isNow ? 'now' : ''}">
       <td><strong>${esc(formatRange(e.shift, tz))}</strong><div class="small muted">${esc(fmt(e.shift.start))} → ${esc(fmt(e.shift.end))}</div></td>
-      <td>${personCell(e.user, swapped ? ` <span class="pill">covering for ${esc(e.base.name)}</span>` : '')}</td>
-      <td>${members.length > 1 ? `<form method="post" action="/schedule/${e.shift.key}/override" class="inline">
-          <select name="user_id" aria-label="Who covers ${esc(formatRange(e.shift, tz))}">${options(e.user?.id)}</select>
-          <button class="sm">Swap</button></form>
-          ${swapped ? `<form method="post" action="/schedule/${e.shift.key}/override/clear" class="inline"><button class="sm">Undo</button></form>` : ''}`
-        : ''}${isNow ? ' <span class="pill open">now</span>' : i === 0 && !onCall ? ' <span class="pill">next</span>' : ''}</td>
+      <td>${peopleCell(e, perWeekend)}</td>
+      <td style="text-align:right">${selfButton(user, e)}${isNow ? ' <span class="pill open">now</span>' : ''}</td>
     </tr>`;
   }).join('');
 
   const incidents = openIncidents.length
     ? `<table>${openIncidents.map((inc) => `<tr>
         <td><a href="/incidents/${inc.id}"><strong>#${inc.id} ${esc(inc.title)}</strong></a>
-          <div class="small muted">${esc(ago(inc.created_at, now))} · ${inc.assigned_name ? `paged ${esc(inc.assigned_name)}` : 'team channel'}</div></td>
+          <div class="small muted">${esc(ago(inc.created_at, now))} · ${inc.assigned_name ? 'paged the on-call' : 'team channel'}</div></td>
         <td><span class="pill ${inc.status}">${inc.status}</span></td>
         <td style="text-align:right">${incidentButtons(inc, 'home')}</td></tr>`).join('')}</table>`
     : '<p class="muted">All quiet. No open incidents.</p>';
+
+  const balanceRows = balance.map((b) => `<tr><td>${esc(b.user.name)}${b.user.is_admin ? ' <span class="pill">admin · optional</span>' : ''}</td>
+    <td style="text-align:right"><strong>${b.weekends}</strong></td></tr>`).join('');
 
   const body = `<div class="grid">
     <div class="card">${hero}</div>
@@ -194,10 +234,58 @@ export function dashboardPage({ user, now, onCall, nextEntry, backup, schedule, 
   </div>
   <div class="card"><h2>Open incidents</h2>${incidents}</div>
   <div class="card"><h2>Weekend rotation</h2>
-    <p class="small muted">Shifts run ${esc(dayTime(config.shiftStart))} → ${esc(dayTime(config.shiftEnd))} (${esc(tz)}). The on-call gets a reminder ${config.reminderHoursBefore}h before.
-    Anyone on the team can swap a weekend; swaps don't change the rest of the rotation.</p>
-    <div class="scroll"><table><thead><tr><th>Weekend</th><th>On call</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    <p class="small muted">Each weekend (${esc(dayTime(config.shiftStart))} → ${esc(dayTime(config.shiftEnd))}, ${esc(tz)}) gets ${perWeekend} people from the rotation, in turn, so everyone gets the same share. Admins are optional.
+    Anyone can <strong>add themselves</strong> to any weekend, with no limit, and <strong>remove themselves</strong> from one of theirs. You can only change your own spot. Every change goes into the <a href="/log">public log</a>.</p>
+    <div class="scroll"><table><thead><tr><th>Weekend</th><th>On call</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>
+  <div class="grid">
+    <div class="card"><h2>Balance · next ${schedule.length} weekends</h2>
+      <table>${balanceRows}</table></div>
+    <div class="card"><h2>Recent changes</h2>${logList(recentLog)}
+      <p class="small" style="margin-bottom:0"><a href="/log">Full audit log →</a></p></div>
+  </div>`;
   return layout({ title: 'On call', user, body, flash, active: 'home' });
+}
+
+function logLine(l) {
+  const wk = esc(weekendLabel(l.weekend_key));
+  if (l.action === 'swap') {
+    return `🔁 <strong>${esc(l.user_name)}</strong> took <strong>${esc(l.other_name)}</strong>'s spot on the weekend of ${wk}${
+      l.undone_at ? ' <span class="pill">undone within 10s</span>' : ''}`;
+  }
+  return `${l.action === 'join' ? '➕' : '➖'} <strong>${esc(l.user_name)}</strong>
+    ${l.action === 'join' ? 'added themselves to' : 'removed themselves from'} the weekend of ${wk}`;
+}
+
+const timeOnly = (iso) => new Intl.DateTimeFormat('en-US', { timeZone: config.timezone, hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+const dayHeading = (iso) => new Intl.DateTimeFormat('en-US', { timeZone: config.timezone, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date(iso));
+
+function logList(log, { grouped = false } = {}) {
+  if (!log.length) return '<p class="muted">No changes yet.</p>';
+  if (!grouped) {
+    return `<ul class="timeline">${log.map((l) => `<li><div>${logLine(l)}</div><div class="small muted">${esc(fmt(l.at))}</div></li>`).join('')}</ul>`;
+  }
+  const days = [];
+  for (const l of log) {
+    const day = dayHeading(l.at);
+    if (!days.length || days[days.length - 1].day !== day) days.push({ day, items: [] });
+    days[days.length - 1].items.push(l);
+  }
+  return days.map((d) => `<h2 style="margin:18px 0 6px">${esc(d.day)}</h2>
+    <ul class="timeline">${d.items.map((l) => `<li class="row" style="align-items:baseline;flex-wrap:nowrap">
+      <span class="small muted" style="min-width:70px">${esc(timeOnly(l.at))}</span><span>${logLine(l)}</span></li>`).join('')}</ul>`).join('');
+}
+
+function weekendLabel(key) {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' })
+    .format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+export function logPage({ user, log, flash }) {
+  const body = `<h1>Audit log</h1>
+  <p class="muted">Visible to everyone on the team: every time someone added themselves to a weekend, removed themselves, or swapped in for someone, newest first.</p>
+  <div class="card">${logList(log, { grouped: true })}</div>`;
+  return layout({ title: 'Audit log', user, body, flash, active: 'log' });
 }
 
 function dayTime({ day, hour, minute }) {
@@ -312,27 +400,40 @@ export function messagePage({ user, title, message, link }) {
   return layout({ title, user, body });
 }
 
+/** Next to each name: "Remove me" on your own name, "Swap" (take their spot) on others. */
+function personAction(user, e, p) {
+  if (e.shift.end <= new Date()) return '';
+  if (p.id === user.id) {
+    return `<form method="post" action="/weekends/${e.shift.key}/leave" class="inline"><input type="hidden" name="back" value="calendar"><button class="sm">Remove me</button></form>`;
+  }
+  if (e.people.some((x) => x.id === user.id)) return ''; // you're already on this weekend
+  return `<form method="post" action="/weekends/${e.shift.key}/swap" class="inline"><input type="hidden" name="user_id" value="${p.id}">
+    <button class="sm" title="Take ${esc(p.name)}'s spot on this weekend">Swap</button></form>`;
+}
+
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const hue = (id) => (Number(id) * 137) % 360;
 
-export function calendarPage({ user, grid, prevMonth, nextMonth, thisMonth, feedUrl, flash }) {
+export function calendarPage({ user, grid, prevMonth, nextMonth, thisMonth, feedUrl, perWeekend, flash }) {
   const tz = config.timezone;
   const dows = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => `<div class="dow">${d}</div>`).join('');
   const timeOf = (d) => new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }).format(d);
   const cells = grid.weeks.flat().map((d) => {
     const e = d.entry;
-    const chip = e?.user
-      ? `<span class="oc" style="--h:${hue(e.user.id)}" title="${esc(e.user.name)} on call">${esc(e.user.name)}${
-        d.isStart ? `<small>from ${esc(timeOf(e.shift.start))}</small>` : d.isEnd ? `<small>until ${esc(timeOf(e.shift.end))}</small>` : ''}</span>`
-      : '';
+    const when = !e ? '' : d.isStart ? `<small>from ${esc(timeOf(e.shift.start))}</small>` : d.isEnd ? `<small>until ${esc(timeOf(e.shift.end))}</small>` : '';
+    const chip = !e ? '' : e.people.length
+      ? e.people.map((p, i) => `<span class="oc" style="--h:${hue(p.id)}" title="${esc(p.name)} on call">${esc(p.name)}${i === e.people.length - 1 ? when : ''}</span>`).join('')
+        + (e.needsCover ? '<span class="oc need">needs cover</span>' : '')
+      : `<span class="oc need">needs cover${when}</span>`;
     return `<div class="${d.inMonth ? '' : 'out'} ${d.today ? 'today' : ''}"><span class="num">${d.day}</span>${chip}</div>`;
   }).join('');
 
   const list = grid.entries.length
     ? `<table>${grid.entries.map((e) => `<tr>
         <td><strong>${esc(formatRange(e.shift, tz))}</strong><div class="small muted">${esc(fmt(e.shift.start))} → ${esc(fmt(e.shift.end))}</div></td>
-        <td>${e.user ? `<span class="swatch" style="--h:${hue(e.user.id)}"></span>${esc(e.user.name)}` : '<span class="muted">nobody</span>'}
-          ${e.user && e.base && e.user.id !== e.base.id ? ` <span class="pill">covering for ${esc(e.base.name)}</span>` : ''}</td></tr>`).join('')}</table>`
+        <td>${e.people.map((p) => `<div class="row" style="gap:8px;margin:3px 0"><span><span class="swatch" style="--h:${hue(p.id)}"></span>${esc(p.name)}</span>${personAction(user, e, p)}</div>`).join('') || '<span class="muted">nobody</span>'}
+          ${e.needsCover ? `<span class="pill open">needs ${perWeekend - e.people.length} more</span>` : ''}</td>
+        <td style="text-align:right">${e.people.some((p) => p.id === user.id) ? '' : selfButton(user, e, 'calendar')}</td></tr>`).join('')}</table>`
     : '<p class="muted">No weekends scheduled this month yet.</p>';
 
   const googleAdd = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(feedUrl.replace(/^https?:/, 'webcal:'))}`;
@@ -344,7 +445,7 @@ export function calendarPage({ user, grid, prevMonth, nextMonth, thisMonth, feed
   <div class="card" style="padding:0;overflow:hidden"><div class="cal">${dows}${cells}</div></div>
   <div class="grid">
     <div class="card"><h2>Weekends this month</h2>${list}
-      <p class="small muted" style="margin-bottom:0">Need to swap? Use the rotation on the <a href="/">On call</a> page.</p></div>
+      <p class="small muted" style="margin-bottom:0"><strong>Add me</strong> joins a weekend. <strong>Swap</strong> takes that person's spot, and you have 10 seconds to undo it before they and Slack are told. Every change is in the <a href="/log">audit log</a>.</p></div>
     <div class="card"><h2>Add to your calendar</h2>
       <p class="small">Subscribe once and every on-call weekend shows up in your calendar, updated automatically.</p>
       <p><a class="btn primary" href="${esc(googleAdd)}" target="_blank" rel="noopener">Add to Google Calendar</a></p>

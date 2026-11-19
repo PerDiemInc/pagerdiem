@@ -29,7 +29,7 @@ export function parseBody(raw, contentType = '') {
 }
 
 const SECURITY_HEADERS = {
-  'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data:; form-action 'self' https://accounts.google.com; frame-ancestors 'none'; base-uri 'none'",
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
   'X-Frame-Options': 'DENY',
@@ -49,6 +49,7 @@ export function makeResponder(res) {
     text: (body, status = 200) => send(status, body, 'text/plain; charset=utf-8'),
     xml: (body, status = 200) => send(status, body, 'text/xml; charset=utf-8'),
     calendar: (body) => send(200, body, 'text/calendar; charset=utf-8'),
+    script: (body) => send(200, body, 'text/javascript; charset=utf-8'),
     redirect: (location, status = 303) => {
       if (res.headersSent) return;
       res.writeHead(status, { ...SECURITY_HEADERS, Location: location, 'Set-Cookie': cookies });

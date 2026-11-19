@@ -72,18 +72,16 @@ export async function icsFeed(deps) {
     'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Per Diem//PagerDiem//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
     'X-WR-CALNAME:Per Diem on-call', 'X-PUBLISHED-TTL:PT1H', 'REFRESH-INTERVAL;VALUE=DURATION:PT1H',
   ];
-  for (let i = 0; i < entries.length; i++) {
-    const e = entries[i];
-    if (!e.user) continue;
-    const backup = entries[i + 1]?.user && entries[i + 1].user.id !== e.user.id ? entries[i + 1].user.name : null;
+  for (const e of entries) {
+    const who = e.people.map((p) => p.name).join(' & ');
     lines.push(
       'BEGIN:VEVENT',
       `UID:oncall-${e.shift.key}@pagerdiem`,
       `DTSTAMP:${stamp}`,
       `DTSTART:${icsDate(e.shift.start)}`,
       `DTEND:${icsDate(e.shift.end)}`,
-      `SUMMARY:${icsText(`📟 On call: ${e.user.name}`)}`,
-      `DESCRIPTION:${icsText(`${e.user.name} is on call this weekend.${backup ? ` Backup: ${backup}.` : ''}\n${config.publicUrl}/calendar`)}`,
+      `SUMMARY:${icsText(who ? `📟 On call: ${who}` : '📟 On call: needs cover')}`,
+      `DESCRIPTION:${icsText(`${who || 'Nobody yet'} on call this weekend.${e.needsCover ? ' Needs cover — add yourself in PagerDiem.' : ''}\n${config.publicUrl}/calendar`)}`,
       'TRANSP:TRANSPARENT',
       'END:VEVENT',
     );
