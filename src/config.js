@@ -77,6 +77,7 @@ export const config = {
     channel: env.SLACK_ONCALL_CHANNEL || '', // channel ID, e.g. C0123456789
     // Only accept slash commands / button clicks from this Slack workspace (team ID, e.g. T0123456).
     teamId: env.SLACK_TEAM_ID || '',
+    engineersGroupId: /^S[A-Z0-9]{6,}$/.test(env.SLACK_ENGINEERS_GROUP_ID || '') ? env.SLACK_ENGINEERS_GROUP_ID : '',
   },
 
   // Team WhatsApp group invite link, shown to signed-in teammates as a "Join" button.

@@ -1,7 +1,7 @@
 // Incidents: trigger -> page on-call -> re-page -> escalate to backup -> alert channel.
 import crypto from 'node:crypto';
 import { config } from './config.js';
-import { mention } from './notify/slack.js';
+import { mention, engineersTag } from './notify/slack.js';
 
 const MINUTE = 60_000;
 
@@ -77,16 +77,16 @@ export function makeIncidents({ db, rotation, notify }) {
       await event(inc.id, `Paged ${people.map((p) => p.name).join(' and ')} (on call)`, now);
       for (const p of people) await page(inc, p, 'You are on call. Please acknowledge.');
       await notify.channel({
-        text: `:rotating_light: Incident #${inc.id}: *${inc.title}* — paging ${people.map(mention).join(' and ')} (on call). ${incUrl(inc)}`,
+        text: `${engineersTag()}${engineersTag() ? ' ' : ''}:rotating_light: Incident #${inc.id}: *${inc.title}* — paging ${people.map(mention).join(' and ')} (on call). ${incUrl(inc)}`,
         incidentId: inc.id,
       });
     } else {
       // Weekday or empty rotation: nobody is on call, so the whole team gets it.
       await event(inc.id, 'Nobody is on call right now — alerted the team channel', now);
       await notify.channel({
-        text: `<!here> :rotating_light: Incident #${inc.id}: *${inc.title}* — nobody is on call right now, ` +
+        text: `${engineersTag('<!here>')} :rotating_light: Incident #${inc.id}: *${inc.title}* — nobody is on call right now, ` +
           `can someone take it? ${incUrl(inc)}`,
-        blocks: pageBlocks(inc, `<!here> :rotating_light: *Incident #${inc.id}: ${inc.title}*\nNobody is on call right now — can someone take it?`),
+        blocks: pageBlocks(inc, `${engineersTag('<!here>')} :rotating_light: *Incident #${inc.id}: ${inc.title}*\nNobody is on call right now — can someone take it?`),
         incidentId: inc.id,
       });
     }
@@ -138,9 +138,9 @@ export function makeIncidents({ db, rotation, notify }) {
         (await db.run('UPDATE incidents SET escalation_level = 2, last_paged_at = ? WHERE id = ?', [now.toISOString(), inc.id]));
         await event(inc.id, `Not acknowledged after ${minutes} min — alerted the whole team channel`, now);
         await notify.channel({
-          text: `<!channel> :fire: Incident #${inc.id} *${inc.title}* has not been acknowledged for ${minutes} min. ` +
+          text: `${engineersTag('<!channel>')} :fire: Incident #${inc.id} *${inc.title}* has not been acknowledged for ${minutes} min. ` +
             `Can anyone take it? ${incUrl(inc)}`,
-          blocks: pageBlocks(inc, `<!channel> :fire: *Incident #${inc.id}: ${inc.title}*\nNot acknowledged for ${minutes} min. Can anyone take it?`),
+          blocks: pageBlocks(inc, `${engineersTag('<!channel>')} :fire: *Incident #${inc.id}: ${inc.title}*\nNot acknowledged for ${minutes} min. Can anyone take it?`),
           incidentId: inc.id,
         });
       };
