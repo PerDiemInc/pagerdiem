@@ -95,6 +95,9 @@ test('non-technical people can view the calendar and audit log and trigger an al
   assert.equal((await app.db.get('SELECT role FROM users WHERE id = ?', [benId])).role, 'engineer');
   assert.equal((await get('/', ben)).status, 200);
   assert.equal((await get('/team', ben)).status, 200);
+  const teamHtml = await (await get('/team', ana)).text();
+  assert.match(teamHtml, /<tr class="role-admin">/);
+  assert.match(teamHtml, /<tr class="role-engineer">/);
   await app.db.run("UPDATE users SET role = 'non_technical' WHERE id = ?", [benId]);
 });
 
