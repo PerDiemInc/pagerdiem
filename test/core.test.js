@@ -10,6 +10,11 @@ process.env.REPAGE_EVERY_MINUTES = '5';
 const { config } = await import('../src/config.js');
 const { makeShifts } = await import('../src/time.js');
 const { freshDb } = await import('./helpers.js');
+const { openDb } = await import('../src/db.js');
+const { DatabaseSync } = await import('node:sqlite');
+const fs = await import('node:fs');
+const os = await import('node:os');
+const path = await import('node:path');
 const { makeRotation } = await import('../src/rotation.js');
 const { makeNotifier } = await import('../src/notify/index.js');
 const { makeIncidents } = await import('../src/incidents.js');
@@ -78,7 +83,7 @@ test('rotation puts 2 people on each weekend, in turn, balanced', async () => {
 test('admins are optional: not auto-assigned, but can add themselves', async () => {
   const { db, rotation, addUsers } = await setup();
   const [ana] = await addUsers('Ana', 'Ben', 'Cal', 'Dee');
-  await db.run('UPDATE users SET is_admin = 1 WHERE id = ?', [ana.id]);
+  await db.run("UPDATE users SET role = 'admin' WHERE id = ?", [ana.id]);
   const sched = await rotation.schedule(shifts.forKey('2026-11-20'), 3);
   assert.deepEqual(namesOf(sched), ['Ben+Cal', 'Dee+Ben', 'Cal+Dee']);
   await rotation.join(shifts.forKey('2026-11-20'), ana, at('2026-11-19T12:00:00Z'));
@@ -261,4 +266,27 @@ test('swap: take someone\'s spot, undo within 10 seconds, announced only after t
   const log = await rotation.log();
   assert.equal(log.filter((l) => l.action === 'swap').length, 2);
   assert.ok(log.some((l) => l.action === 'swap' && l.undone_at), 'undone swap stays in the audit log, marked undone');
+});
+
+test('existing databases get a role: admins stay admin, everyone else becomes an engineer', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-migrate-'));
+  const file = path.join(dir, 'old.db');
+  const old = new DatabaseSync(file);
+  old.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL, slack_user_id TEXT, whatsapp TEXT NOT NULL, is_admin INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1, rotation_order INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT 'x')`);
+  old.exec(`INSERT INTO users (name, email, password_hash, whatsapp, is_admin, rotation_order) VALUES
+    ('Ana', 'a@x.com', 'x', '+1', 1, 10), ('Ben', 'b@x.com', 'x', '+2', 0, 20)`);
+  old.close();
+
+  const db = await openDb(file);
+  const roles = Object.fromEntries((await db.all('SELECT name, role FROM users')).map((u) => [u.name, u.role]));
+  assert.deepEqual(roles, { Ana: 'admin', Ben: 'engineer' });
+
+  await db.run("UPDATE users SET role = 'non_technical' WHERE name = 'Ana'");
+  await db.close();
+  const reopened = await openDb(file);
+  assert.equal((await reopened.get("SELECT role FROM users WHERE name = 'Ana'")).role, 'non_technical', 'migration runs once');
+  await reopened.close();
+  fs.rmSync(dir, { recursive: true });
 });

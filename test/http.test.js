@@ -48,7 +48,7 @@ test('signup validates input and the first user becomes admin', async () => {
   const cookie = cookieOf(res);
   assert.ok(cookie);
   const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@example.com'");
-  assert.equal(ana.is_admin, 1);
+  assert.equal(ana.role, 'admin');
   assert.equal(ana.whatsapp, '+14155550100');
   assert.equal(ana.slack_user_id, 'U0ANA12345');
 
@@ -57,7 +57,45 @@ test('signup validates input and the first user becomes admin', async () => {
   assert.match(await home.text(), /Weekend rotation/);
 
   res = await post('/signup', form({ name: 'Ben', email: 'ben@example.com', password: 'longenough123', slack: 'U0BEN12345', whatsapp: '+14155550101' }));
-  assert.equal((await app.db.get("SELECT is_admin FROM users WHERE email = 'ben@example.com'")).is_admin, 0);
+  assert.equal((await app.db.get("SELECT role FROM users WHERE email = 'ben@example.com'")).role, 'non_technical');
+});
+
+test('non-technical people can view the calendar and audit log and trigger an alert, nothing else', async () => {
+  const login = async (email) => cookieOf(await post('/login', form({ email, password: 'longenough123' })));
+  const ana = await login('ana@example.com');
+  const ben = await login('ben@example.com');
+  const get = (path, cookie) => fetch(base + path, { redirect: 'manual', headers: { cookie } });
+  const act = (path, cookie, body = {}) => post(path, form(body), { cookie });
+
+  assert.equal((await get('/', ben)).headers.get('location'), '/calendar');
+  assert.equal((await get('/calendar', ben)).status, 200);
+  assert.equal((await get('/log', ben)).status, 200);
+  assert.equal((await get('/incidents', ben)).status, 200);
+  assert.equal((await get('/team', ben)).status, 403);
+  assert.equal((await get('/settings', ben)).status, 403);
+  assert.equal((await act('/weekends/2026-11-20/join', ben)).status, 403);
+  assert.equal((await act('/weekends/2026-11-20/swap', ben, { user_id: '1' })).status, 403);
+  assert.doesNotMatch(await (await get('/calendar', ben)).text(), /Add me|Swap/);
+
+  const created = await act('/incidents', ben, { title: 'Checkout is down' });
+  assert.equal(created.status, 303);
+  const id = created.headers.get('location').split('/').pop();
+  assert.equal((await act(`/incidents/${id}/ack`, ben)).status, 403);
+  assert.equal((await act(`/incidents/${id}/resolve`, ben)).status, 403);
+  assert.equal((await act(`/incidents/${id}/ack`, ana)).status, 303);
+
+  const benId = (await app.db.get("SELECT id FROM users WHERE email = 'ben@example.com'")).id;
+  const anaId = (await app.db.get("SELECT id FROM users WHERE email = 'ana@example.com'")).id;
+  assert.equal((await act(`/team/${benId}/role`, ben, { role: 'admin' })).status, 403);
+  assert.equal((await act(`/team/${benId}/role`, ana, { role: 'owner' })).status, 400);
+  await act(`/team/${anaId}/role`, ana, { role: 'engineer' });
+  assert.equal((await app.db.get('SELECT role FROM users WHERE id = ?', [anaId])).role, 'admin', 'the last admin cannot be demoted');
+
+  await act(`/team/${benId}/role`, ana, { role: 'engineer' });
+  assert.equal((await app.db.get('SELECT role FROM users WHERE id = ?', [benId])).role, 'engineer');
+  assert.equal((await get('/', ben)).status, 200);
+  assert.equal((await get('/team', ben)).status, 200);
+  await app.db.run("UPDATE users SET role = 'non_technical' WHERE id = ?", [benId]);
 });
 
 test('login rejects a wrong password and accepts the right one', async () => {

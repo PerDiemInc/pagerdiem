@@ -1,6 +1,7 @@
 // Server-rendered HTML. Every interpolated value goes through esc().
 import { config } from './config.js';
 import { formatLocal, formatRange } from './time.js';
+import { ROLES, ROLE_LABELS, isAdmin, isResponder } from './roles.js';
 
 export const esc = (v) => String(v ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -72,8 +73,11 @@ background:hsl(var(--h) 75% 91%);color:hsl(var(--h) 60% 25%);overflow:hidden;tex
 
 export function layout({ title, user, body, flash, active }) {
   const link = (href, label, key) => `<a href="${href}" class="${active === key ? 'on' : ''}">${label}</a>`;
+  const links = !user ? '' : isResponder(user)
+    ? `${link('/', 'On call', 'home')}${link('/calendar', 'Calendar', 'calendar')}${link('/log', 'Audit log', 'log')}${link('/incidents', 'Incidents', 'incidents')}${link('/team', 'Team', 'team')}${link('/settings', 'Settings', 'settings')}`
+    : `${link('/calendar', 'Calendar', 'calendar')}${link('/log', 'Audit log', 'log')}${link('/incidents', 'Incidents', 'incidents')}`;
   const nav = user
-    ? `<nav>${link('/', 'On call', 'home')}${link('/calendar', 'Calendar', 'calendar')}${link('/log', 'Audit log', 'log')}${link('/incidents', 'Incidents', 'incidents')}${link('/team', 'Team', 'team')}${link('/settings', 'Settings', 'settings')}</nav>
+    ? `<nav>${links}</nav>
        <div class="row small"><span class="muted">${esc(user.name)}</span><form method="post" action="/logout" class="inline"><button class="sm">Log out</button></form></div>`
     : '<nav></nav>';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -176,7 +180,7 @@ const names = (people) => people.map((p) => esc(p.name)).join(' & ');
 
 /** "Add me" / "Remove me" for the signed-in user only. */
 function selfButton(user, e, back = '') {
-  if (e.shift.end <= new Date()) return '';
+  if (e.shift.end <= new Date() || !isResponder(user)) return '';
   const on = e.people.some((p) => p.id === user.id);
   const hidden = back ? `<input type="hidden" name="back" value="${back}">` : '';
   return on
@@ -217,22 +221,17 @@ export function dashboardPage({ user, now, onCall, nextEntry, backup, schedule, 
         <td><a href="/incidents/${inc.id}"><strong>#${inc.id} ${esc(inc.title)}</strong></a>
           <div class="small muted">${esc(ago(inc.created_at, now))} · ${inc.assigned_name ? 'paged the on-call' : 'team channel'}</div></td>
         <td><span class="pill ${inc.status}">${inc.status}</span></td>
-        <td style="text-align:right">${incidentButtons(inc, 'home')}</td></tr>`).join('')}</table>`
+        <td style="text-align:right">${incidentButtons(user, inc, 'home')}</td></tr>`).join('')}</table>`
     : '<p class="muted">All quiet. No open incidents.</p>';
 
-  const balanceRows = balance.map((b) => `<tr><td>${esc(b.user.name)}${b.user.is_admin ? ' <span class="pill">admin · optional</span>' : ''}</td>
+  const balanceRows = balance.map((b) => `<tr><td>${esc(b.user.name)}${isAdmin(b.user) ? ' <span class="pill">admin · optional</span>' : ''}</td>
     <td style="text-align:right"><strong>${b.weekends}</strong></td></tr>`).join('');
 
   const group = config.whatsappGroupUrl
     ? `<p style="margin:14px 0 0"><a class="btn" href="${esc(config.whatsappGroupUrl)}" target="_blank" rel="noopener noreferrer">💬 Join the on-call WhatsApp group</a></p>` : '';
   const body = `<div class="grid">
     <div class="card">${hero}${group}</div>
-    <div class="card"><h2>Page the on-call</h2>
-      <form method="post" action="/incidents">
-        <input name="title" required maxlength="200" placeholder="What's broken? e.g. Checkout failing for all stores">
-        <textarea name="details" maxlength="4000" placeholder="Details, links, dashboards (optional)" style="margin-top:8px"></textarea>
-        <p style="margin:10px 0 0"><button class="primary">🚨 Page now</button></p>
-      </form></div>
+    <div class="card"><h2>Page the on-call</h2>${pageForm()}</div>
   </div>
   <div class="card"><h2>Open incidents</h2>${incidents}</div>
   <div class="card"><h2>Weekend rotation</h2>
@@ -290,14 +289,22 @@ export function logPage({ user, log, flash }) {
   return layout({ title: 'Audit log', user, body, flash, active: 'log' });
 }
 
+function pageForm() {
+  return `<form method="post" action="/incidents">
+        <input name="title" required maxlength="200" placeholder="What's broken? e.g. Checkout failing for all stores">
+        <textarea name="details" maxlength="4000" placeholder="Details, links, dashboards (optional)" style="margin-top:8px"></textarea>
+        <p style="margin:10px 0 0"><button class="primary">🚨 Page now</button></p>
+      </form>`;
+}
+
 function dayTime({ day, hour, minute }) {
   const d = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][day];
   const h = hour % 12 || 12;
   return `${d} ${h}:${String(minute).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`;
 }
 
-function incidentButtons(inc, back = '') {
-  if (inc.status === 'resolved') return '';
+function incidentButtons(user, inc, back = '') {
+  if (inc.status === 'resolved' || !isResponder(user)) return '';
   return `<div class="row" style="justify-content:flex-end">
     ${inc.status === 'open' ? `<form method="post" action="/incidents/${inc.id}/ack" class="inline"><input type="hidden" name="back" value="${back}"><button class="sm primary">Acknowledge</button></form>` : ''}
     <form method="post" action="/incidents/${inc.id}/resolve" class="inline"><button class="sm">Resolve</button></form></div>`;
@@ -310,8 +317,10 @@ export function incidentsPage({ user, incidents, now, flash }) {
     <td>${esc(inc.assigned_name || '—')}</td>
     <td><span class="pill ${inc.status}">${inc.status}</span>
       <div class="small muted">${inc.acked_by_name ? `ack ${esc(inc.acked_by_name)}` : ''}</div></td>
-    <td style="text-align:right">${incidentButtons(inc)}</td></tr>`).join('');
-  const body = `<h1>Incidents</h1><div class="card scroll">${incidents.length
+    <td style="text-align:right">${incidentButtons(user, inc)}</td></tr>`).join('');
+  const body = `<h1>Incidents</h1>
+  <div class="card"><h2>Trigger an alert</h2>${pageForm()}</div>
+  <div class="card scroll">${incidents.length
     ? `<table><thead><tr><th>Incident</th><th>Paged</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
     : '<p class="muted">No incidents yet. 🎉</p>'}</div>`;
   return layout({ title: 'Incidents', user, body, flash, active: 'incidents' });
@@ -324,7 +333,7 @@ export function incidentPage({ user, inc, events, people, notifications, flash }
     ${inc.details ? `<p style="white-space:pre-wrap">${esc(inc.details)}</p>` : ''}
     <p class="small muted">Triggered ${esc(fmt(inc.created_at))} via ${esc(inc.source)} ·
       On call: ${esc(people.assigned?.name || 'nobody')} · Backup: ${esc(people.backup?.name || '—')}</p>
-    ${incidentButtons(inc)}</div>
+    ${incidentButtons(user, inc)}</div>
   <div class="grid">
     <div class="card"><h2>Timeline</h2><ul class="timeline">${events.map((e) =>
       `<li><div>${esc(e.message)}</div><div class="small muted">${esc(fmt(e.at))}</div></li>`).join('')}</ul></div>
@@ -342,17 +351,17 @@ function notificationTable(rows) {
 }
 
 export function teamPage({ user, members, inactive, flash }) {
-  const admin = user.is_admin;
+  const admin = isAdmin(user);
   const rows = members.map((m, i) => `<tr>
     <td>${i + 1}</td>
-    <td>${personCell(m, m.is_admin ? ' <span class="pill">admin</span>' : '')}<div class="small muted">${esc(m.email)}</div></td>
+    <td>${personCell(m, ` <span class="pill">${esc(ROLE_LABELS[m.role] || m.role)}</span>`)}<div class="small muted">${esc(m.email)}</div></td>
     <td class="small hide-sm">${m.slack_user_id ? `<code>${esc(m.slack_user_id)}</code>` : '<span class="pill failed">not linked</span>'}</td>
     <td class="small hide-sm">${esc(m.whatsapp)}</td>
     <td style="text-align:right">${admin ? `<div class="row" style="justify-content:flex-end">
       <form method="post" action="/team/${m.id}/move" class="inline"><input type="hidden" name="dir" value="-1"><button class="sm" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button></form>
       <form method="post" action="/team/${m.id}/move" class="inline"><input type="hidden" name="dir" value="1"><button class="sm" ${i === members.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button></form>
       <form method="post" action="/team/${m.id}/active" class="inline"><input type="hidden" name="active" value="0"><button class="sm">Remove</button></form>
-      ${m.is_admin ? '' : `<form method="post" action="/team/${m.id}/admin" class="inline"><button class="sm">Make admin</button></form>`}
+      <form method="post" action="/team/${m.id}/role" class="inline"><select name="role" aria-label="Role for ${esc(m.name)}">${ROLES.map((r) => `<option value="${r}" ${m.role === r ? 'selected' : ''}>${esc(ROLE_LABELS[r])}</option>`).join('')}</select><button class="sm">Set role</button></form>
     </div>` : ''}</td></tr>`).join('');
   const removed = inactive.length ? `<div class="card"><h2>Removed from rotation</h2><table>${inactive.map((m) => `<tr>
     <td>${esc(m.name)} <span class="small muted">${esc(m.email)}</span></td>
@@ -360,7 +369,7 @@ export function teamPage({ user, members, inactive, flash }) {
   </tr>`).join('')}</table></div>` : '';
   const body = `<h1>Team</h1>
   <div class="card scroll"><h2>Rotation order</h2>
-    <p class="small muted">Each weekend goes to the next person in this list. ${admin ? 'You can reorder or remove people.' : 'Ask an admin to reorder.'}</p>
+    <p class="small muted">Each weekend goes to the next engineer in this list. Admins are optional, and non-technical people (C-level, support, product) are never on call: they can view the calendar and audit log and trigger an alert. ${admin ? 'You can reorder or remove people.' : 'Ask an admin to reorder.'}</p>
     <table><thead><tr><th>#</th><th>Name</th><th class="hide-sm">Slack</th><th class="hide-sm">WhatsApp</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
   ${removed}
   <div class="card" style="max-width:520px"><h2>Your contact details</h2>
@@ -404,7 +413,7 @@ export function messagePage({ user, title, message, link }) {
 
 /** Next to each name: "Remove me" on your own name, "Swap" (take their spot) on others. */
 function personAction(user, e, p) {
-  if (e.shift.end <= new Date()) return '';
+  if (e.shift.end <= new Date() || !isResponder(user)) return '';
   if (p.id === user.id) {
     return `<form method="post" action="/weekends/${e.shift.key}/leave" class="inline"><input type="hidden" name="back" value="calendar"><button class="sm">Remove me</button></form>`;
   }
@@ -447,7 +456,9 @@ export function calendarPage({ user, grid, prevMonth, nextMonth, thisMonth, feed
   <div class="card" style="padding:0;overflow:hidden"><div class="cal">${dows}${cells}</div></div>
   <div class="grid">
     <div class="card"><h2>Weekends this month</h2>${list}
-      <p class="small muted" style="margin-bottom:0"><strong>Add me</strong> joins a weekend. <strong>Swap</strong> takes that person's spot, and you have 10 seconds to undo it before they and Slack are told. Every change is in the <a href="/log">audit log</a>.</p></div>
+      <p class="small muted" style="margin-bottom:0">${isResponder(user)
+        ? `<strong>Add me</strong> joins a weekend. <strong>Swap</strong> takes that person's spot, and you have 10 seconds to undo it before they and Slack are told. Every change is in the <a href="/log">audit log</a>.`
+        : 'Need an engineer now? <a href="/incidents">Trigger an alert</a>. Every roster change is in the <a href="/log">audit log</a>.'}</p></div>
     <div class="card"><h2>Add to your calendar</h2>
       <p class="small">Subscribe once and every on-call weekend shows up in your calendar, updated automatically.</p>
       <p><a class="btn primary" href="${esc(googleAdd)}" target="_blank" rel="noopener">Add to Google Calendar</a></p>
