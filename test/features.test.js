@@ -103,7 +103,7 @@ test('Google round trip: new teammate adds Slack + WhatsApp; duplicates are refu
   assert.equal(res.status, 303);
   const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@example.com'");
   assert.equal(ana.slack_user_id, 'U0ANA12345');
-  assert.equal(ana.is_admin, 1);
+  assert.equal(ana.role, 'admin');
 
   cb = await signIn('ben@example.com', 'Ben');
   pending = cb.headers.getSetCookie().find((c) => c.startsWith('pd_pending=')).split(';')[0];
@@ -116,6 +116,8 @@ test('Google round trip: new teammate adds Slack + WhatsApp; duplicates are refu
   assert.match(await res.text(), /WhatsApp number already belongs to Ana Admin/);
   res = await welcome({ name: 'Ben', slack: 'U0BEN12345', whatsapp: '+14155550101' });
   assert.equal(res.status, 303);
+  assert.equal((await app.db.get("SELECT role FROM users WHERE email = 'ben@example.com'")).role, 'non_technical');
+  await app.db.run("UPDATE users SET role = 'engineer' WHERE email = 'ben@example.com'");
 
   // Returning user goes straight in.
   cb = await signIn('ana@example.com', 'Ana Admin');

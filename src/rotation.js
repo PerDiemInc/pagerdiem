@@ -2,18 +2,21 @@
 //
 // - The rotation assigns PER_WEEKEND people (default 2) to every weekend, walking the
 //   team in `rotation_order` so everyone gets the same share. Admins are not assigned
-//   automatically; they can add themselves to any weekend.
+//   automatically; they can add themselves to any weekend. Non-technical people (C-level,
+//   support, product) are never on call.
 // - Anyone can add themselves to any weekend (no limit) and remove themselves from one.
 //   Nobody can add or remove someone else. Every add/remove is written to roster_log.
 // - When a weekend starts, the rotation's picks are frozen in shift_people, and future
 //   weekends are projected from the last frozen one. People joining, leaving the team or
 //   being reordered therefore never reshuffle weekends that already happened.
 
+import { isResponder } from './roles.js';
+
 export function makeRotation(db, shifts, { perWeekend = 2 } = {}) {
   const activeMembers = () => db.all('SELECT * FROM users WHERE active = 1 ORDER BY rotation_order, id');
-  /** People the rotation assigns automatically: active, non-admin. */
+  /** People the rotation assigns automatically: active engineers (admins are optional, non-technical never). */
   const rotationMembers = () =>
-    db.all('SELECT * FROM users WHERE active = 1 AND is_admin = 0 ORDER BY rotation_order, id');
+    db.all("SELECT * FROM users WHERE active = 1 AND role = 'engineer' ORDER BY rotation_order, id");
   const userById = async (id) => (id == null ? null : (await db.get('SELECT * FROM users WHERE id = ?', [id])) ?? null);
 
   /** The rotation member after `prev` in order (wrapping), or the first one. */
@@ -98,11 +101,11 @@ export function makeRotation(db, shifts, { perWeekend = 2 } = {}) {
       const changes = await changesFor(shift.key);
       const left = changes.filter((c) => c.status === 'out').map((c) => c.user_id);
       const joined = changes.filter((c) => c.status === 'in').map((c) => c.user_id);
-      const people = base.filter((u) => u.active && !left.includes(u.id));
+      const people = base.filter((u) => u.active && isResponder(u) && !left.includes(u.id));
       for (const id of joined) {
         if (people.some((p) => p.id === id)) continue;
         const u = await userById(id);
-        if (u?.active) people.push(u);
+        if (u?.active && isResponder(u)) people.push(u);
       }
       out.push({ shift, base, people, joined, left, locked: frozen.length > 0, needsCover: people.length < perWeekend });
       shift = shifts.following(shift);
@@ -142,7 +145,7 @@ export function makeRotation(db, shifts, { perWeekend = 2 } = {}) {
     const onCallIds = new Set(current.people.map((p) => p.id));
     const fromNext = next.people.find((p) => !onCallIds.has(p.id));
     if (fromNext) return fromNext;
-    return (await activeMembers()).find((m) => !onCallIds.has(m.id)) || null;
+    return (await activeMembers()).find((m) => isResponder(m) && !onCallIds.has(m.id)) || null;
   }
 
   /** Add yourself to a weekend. Returns { changed }. */
@@ -240,7 +243,7 @@ export function makeRotation(db, shifts, { perWeekend = 2 } = {}) {
 
   /** Weekends per person over a list of schedule entries, for the balance view. */
   async function balance(entries) {
-    const counts = new Map((await activeMembers()).map((m) => [m.id, { user: m, weekends: 0 }]));
+    const counts = new Map((await activeMembers()).filter(isResponder).map((m) => [m.id, { user: m, weekends: 0 }]));
     for (const e of entries) for (const p of e.people) if (counts.has(p.id)) counts.get(p.id).weekends += 1;
     return [...counts.values()].sort((a, b) => b.weekends - a.weekends || a.user.name.localeCompare(b.user.name));
   }

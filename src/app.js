@@ -17,6 +17,7 @@ import {
 } from './auth.js';
 import { HttpError, readBody, parseBody, makeResponder, makeRouter } from './http.js';
 import * as views from './views.js';
+import { DEFAULT_ROLE, isRole, isAdmin, isResponder } from './roles.js';
 
 const SLACK_ID = /^[UW][A-Z0-9]{6,}$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -72,7 +73,10 @@ export function createApp({ db, notifierOverrides } = {}) {
     return true;
   }
   function requireAdmin(ctx) {
-    if (!ctx.user?.is_admin) throw new HttpError(403, 'Only admins can do that');
+    if (!isAdmin(ctx.user)) throw new HttpError(403, 'Only admins can do that');
+  }
+  function requireResponder(ctx) {
+    if (!isResponder(ctx.user)) throw new HttpError(403, 'Only engineers and admins can do that');
   }
 
   // Login throttling: 10 failed attempts per email+IP per 15 minutes.
@@ -109,11 +113,12 @@ export function createApp({ db, notifierOverrides } = {}) {
     if (clash) return { error: clash };
 
     const isFirst = (await userCount()) === 0;
-    const { id } = await db.get(`INSERT INTO users (name, email, password_hash, slack_user_id, whatsapp, is_admin, rotation_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-    [name, email, passwordHash, slackId, whatsapp, isFirst ? 1 : 0, await rotation.nextRotationOrder()]);
+    const role = isFirst ? 'admin' : DEFAULT_ROLE;
+    const { id } = await db.get(`INSERT INTO users (name, email, password_hash, slack_user_id, whatsapp, is_admin, role, rotation_order)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    [name, email, passwordHash, slackId, whatsapp, isFirst ? 1 : 0, role, await rotation.nextRotationOrder()]);
     const user = await rotation.userById(Number(id));
-    await notify.channel({ text: `:wave: ${mention(user)} joined the weekend on-call rotation.` });
+    if (isResponder(user)) await notify.channel({ text: `:wave: ${mention(user)} joined the weekend on-call rotation.` });
     return { user, isFirst };
   }
 
@@ -126,10 +131,12 @@ export function createApp({ db, notifierOverrides } = {}) {
     return null;
   }
 
-  function welcomeFlash(r, isFirst) {
+  function welcomeFlash(r, user, isFirst) {
     setFlash(r, 'ok', isFirst
       ? "Welcome! You're the first member, so you're an admin. Invite the rest of the team to sign up."
-      : "You're in the weekend rotation. Use “Send me a test message” on the Team page to check Slack and WhatsApp.");
+      : isResponder(user)
+        ? "You're in the weekend rotation. Use “Send me a test message” on the Team page to check Slack and WhatsApp."
+        : "You're in. You can view the calendar and audit log and trigger an alert. Ask an admin if you should be on call.");
   }
 
   // Passwords can't prove someone works at your company, so they're only for local development.
@@ -164,7 +171,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     });
     if (error) return fail(error);
     ctx.r.cookie(sessionCookie(user.id));
-    welcomeFlash(ctx.r, isFirst);
+    welcomeFlash(ctx.r, user, isFirst);
     ctx.r.redirect('/');
   });
 
@@ -240,7 +247,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     if (error) return ctx.r.html(views.welcomePage({ identity, values: ctx.body, error }), 400);
     ctx.r.cookie(tempCookie(PENDING_COOKIE, '', 0));
     ctx.r.cookie(sessionCookie(user.id));
-    welcomeFlash(ctx.r, isFirst);
+    welcomeFlash(ctx.r, user, isFirst);
     ctx.r.redirect('/');
   });
 
@@ -249,6 +256,7 @@ export function createApp({ db, notifierOverrides } = {}) {
   // ---------- dashboard & schedule ----------
   router.get('/', async (ctx) => {
     if (!requireUser(ctx)) return;
+    if (!isResponder(ctx.user)) return ctx.r.redirect('/calendar');
     const now = new Date();
     const onCall = await rotation.onCallNow(now);
     const schedule = await rotation.schedule(shifts.currentOrNext(now), 12);
@@ -268,6 +276,7 @@ export function createApp({ db, notifierOverrides } = {}) {
   // Add or remove YOURSELF for a weekend. There is deliberately no way to change anyone else.
   async function rosterChange(ctx, action) {
     if (!requireUser(ctx)) return;
+    requireResponder(ctx);
     parseKey(ctx.params.key);
     const shift = shifts.forKey(ctx.params.key);
     const fn = action === 'join' ? rotation.join : rotation.leave;
@@ -297,6 +306,7 @@ export function createApp({ db, notifierOverrides } = {}) {
   // replaced person hear about it only after that window passes (see announceSwaps).
   router.post('/weekends/:key/swap', async (ctx) => {
     if (!requireUser(ctx)) return;
+    requireResponder(ctx);
     parseKey(ctx.params.key);
     const shift = shifts.forKey(ctx.params.key);
     const replaced = await rotation.userById(Number(ctx.body.user_id));
@@ -398,6 +408,7 @@ export function createApp({ db, notifierOverrides } = {}) {
 
   router.post('/incidents/:id/ack', async (ctx) => {
     if (!requireUser(ctx)) return;
+    requireResponder(ctx);
     const { changed } = await incidents.acknowledge(Number(ctx.params.id), ctx.user, 'web');
     setFlash(ctx.r, 'ok', changed ? 'Acknowledged. Paging stopped.' : 'Already acknowledged.');
     ctx.r.redirect(ctx.body.back === 'home' ? '/' : `/incidents/${ctx.params.id}`);
@@ -405,6 +416,7 @@ export function createApp({ db, notifierOverrides } = {}) {
 
   router.post('/incidents/:id/resolve', async (ctx) => {
     if (!requireUser(ctx)) return;
+    requireResponder(ctx);
     await incidents.resolve(Number(ctx.params.id), ctx.user, 'web');
     setFlash(ctx.r, 'ok', 'Resolved.');
     ctx.r.redirect(`/incidents/${ctx.params.id}`);
@@ -440,6 +452,7 @@ export function createApp({ db, notifierOverrides } = {}) {
   // ---------- team ----------
   router.get('/team', async (ctx) => {
     if (!requireUser(ctx)) return;
+    requireResponder(ctx);
     ctx.r.html(views.teamPage({
       user: ctx.user, members: (await rotation.activeMembers()),
       inactive: (await db.all('SELECT * FROM users WHERE active = 0 ORDER BY name')),
@@ -465,10 +478,22 @@ export function createApp({ db, notifierOverrides } = {}) {
     ctx.r.redirect('/team');
   });
 
-  router.post('/team/:id/admin', async (ctx) => {
+  router.post('/team/:id/role', async (ctx) => {
     if (!requireUser(ctx)) return;
     requireAdmin(ctx);
-    (await db.run('UPDATE users SET is_admin = 1 WHERE id = ?', [Number(ctx.params.id)]));
+    const role = String(ctx.body.role || '');
+    if (!isRole(role)) throw new HttpError(400, 'Pick a role.');
+    const target = await rotation.userById(Number(ctx.params.id));
+    if (!target) throw new HttpError(404, 'Person not found');
+    if (target.role === 'admin' && role !== 'admin') {
+      const admins = await db.get("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1");
+      if (admins.n <= 1) {
+        setFlash(ctx.r, 'error', 'There must be at least one admin.');
+        return ctx.r.redirect('/team');
+      }
+    }
+    await db.run('UPDATE users SET role = ?, is_admin = ? WHERE id = ?', [role, role === 'admin' ? 1 : 0, target.id]);
+    setFlash(ctx.r, 'ok', `${target.name} is now ${role.replace('_', '-')}.`);
     ctx.r.redirect('/team');
   });
 
@@ -511,6 +536,7 @@ export function createApp({ db, notifierOverrides } = {}) {
 
   router.get('/settings', async (ctx) => {
     if (!requireUser(ctx)) return;
+    requireResponder(ctx);
     ctx.r.html(views.settingsPage({
       user: ctx.user,
       status: { slack: slackEnabled(), whatsapp: whatsappEnabled(), api: Boolean(config.apiToken) },
@@ -579,6 +605,16 @@ export function createApp({ db, notifierOverrides } = {}) {
     if (!action || !['ack', 'resolve'].includes(action.action_id)) return;
     const user = (await userBySlack(payload.user?.id));
     const id = Number(action.value);
+    if (user && !isResponder(user)) {
+      if (payload.response_url) {
+        fetch(payload.response_url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ replace_original: false, response_type: 'ephemeral', text: 'Only engineers and admins can acknowledge or resolve incidents.' }),
+        }).catch((err) => console.error('slack interaction failed:', err));
+      }
+      return;
+    }
     (async () => {
       const fn = action.action_id === 'ack' ? incidents.acknowledge : incidents.resolve;
       const { changed, incident } = await fn(id, user || { name: `<@${payload.user?.id}>` }, 'slack');
@@ -606,6 +642,8 @@ export function createApp({ db, notifierOverrides } = {}) {
     const reply = (msg) => ctx.r.xml(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${views.esc(msg)}</Message></Response>`);
 
     if (!user) return reply("This number isn't registered with PagerDiem. Sign up at " + config.publicUrl);
+    const respondersOnly = ['ACK', 'ACKNOWLEDGE', 'OK', 'ON IT', 'RESOLVE', 'RESOLVED', 'FIXED', 'DONE'];
+    if (respondersOnly.includes(word) && !isResponder(user)) return reply('Only engineers and admins can acknowledge or resolve incidents.');
     if (['ACK', 'ACKNOWLEDGE', 'OK', 'ON IT'].includes(word)) {
       const inc = (await incidents.latestOpenFor(user));
       if (!inc) return reply('No open incidents. 👍');

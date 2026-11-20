@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash   TEXT NOT NULL,
   slack_user_id   TEXT,
   whatsapp        TEXT NOT NULL,            -- E.164, e.g. +14155550123
-  is_admin        INTEGER NOT NULL DEFAULT 0,
+  is_admin        INTEGER NOT NULL DEFAULT 0,  -- legacy, kept in sync with role = 'admin' so a rollback still works
+  role            TEXT NOT NULL DEFAULT 'engineer' CHECK (role IN ('admin','engineer','non_technical')),
   active          INTEGER NOT NULL DEFAULT 1,
   rotation_order  INTEGER NOT NULL,
   created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -135,6 +136,11 @@ function openSqlite(file) {
     const raw = new DatabaseSync(file);
     raw.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
     raw.exec(SQLITE_SCHEMA);
+    const columns = raw.prepare('PRAGMA table_info(users)').all();
+    if (!columns.some((c) => c.name === 'role')) {
+      raw.exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'engineer' CHECK (role IN ('admin','engineer','non_technical'))`);
+      raw.exec(`UPDATE users SET role = 'admin' WHERE is_admin = 1`);
+    }
     return {
       dialect: 'sqlite',
       async get(sql, params = []) { return raw.prepare(sql).get(...params); },
@@ -152,6 +158,12 @@ async function openPostgres(url) {
   const pool = new pg.Pool({ connectionString: url, max: 5, idleTimeoutMillis: 30_000 });
   pool.on('error', (err) => console.error('postgres pool error:', err.message));
   await pool.query(PG_SCHEMA);
+  const hasRole = await pool.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'role'`);
+  if (!hasRole.rowCount) {
+    await pool.query(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'engineer' CHECK (role IN ('admin','engineer','non_technical'))`);
+    await pool.query(`UPDATE users SET role = 'admin' WHERE is_admin = 1`);
+  }
   return {
     dialect: 'pg',
     async get(sql, params = []) { return (await pool.query(toPgPlaceholders(sql), params)).rows[0]; },
