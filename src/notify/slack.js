@@ -52,3 +52,6 @@ export function verifySlackSignature(headers, rawBody, now = Date.now()) {
 
 export const mention = (user) =>
   (/^[UW][A-Z0-9]{6,}$/.test(user?.slack_user_id || '') ? `<@${user.slack_user_id}>` : user?.name ?? 'nobody');
+
+export const engineersTag = (fallback = '') =>
+  (config.slack.engineersGroupId ? `<!subteam^${config.slack.engineersGroupId}>` : fallback);

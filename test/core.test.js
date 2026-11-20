@@ -188,6 +188,21 @@ test('weekday incidents go to the team channel', async () => {
   assert.ok(sent[0].text.includes('<!here>'));
 });
 
+test('the engineers user group is tagged when configured', async () => {
+  const { db, rotation, notify, sent, addUser } = await setup();
+  await addUser('Ana');
+  config.slack.channel = 'CONCALL';
+  config.slack.engineersGroupId = 'S0ENGINEERS';
+  try {
+    const incidents = makeIncidents({ db, rotation, notify });
+    await incidents.create({ title: 'Slow API' }, at('2026-11-18T15:00:00Z'));
+    assert.ok(sent[0].text.includes('<!subteam^S0ENGINEERS>'));
+    assert.ok(!sent[0].text.includes('<!here>'));
+  } finally {
+    config.slack.engineersGroupId = '';
+  }
+});
+
 test('scheduler sends the reminder and shift start once each', async () => {
   const { db, rotation, notify, sent, addUser, addUsers } = await setup();
   await addUsers('Ana', 'Ben');
