@@ -19,9 +19,9 @@ function ago(iso, now = new Date()) {
 
 const CSS = `
 :root{--bg:#f6f7f9;--card:#fff;--text:#16181d;--muted:#5f6673;--line:#e3e6eb;--accent:#e8492b;--accent-ink:#fff;
---ok:#14804a;--ok-bg:#e6f6ec;--warn:#9a6700;--warn-bg:#fff4d6;--bad:#c4271a;--bad-bg:#fde8e6;--chip:#eef0f3}
+--role-admin-bg:#fde9e5;--role-engineer-bg:#e4f0fd;--role-non-technical-bg:#eef0f3;--ok:#14804a;--ok-bg:#e6f6ec;--warn:#9a6700;--warn-bg:#fff4d6;--bad:#c4271a;--bad-bg:#fde8e6;--chip:#eef0f3}
 @media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a20;--text:#e8eaee;--muted:#9aa1ad;--line:#2a2f38;
---accent:#ff6a4d;--ok:#4cc38a;--ok-bg:#12291d;--warn:#e0b341;--warn-bg:#2d2412;--bad:#ff7b6e;--bad-bg:#331714;--chip:#232831}}
+--accent:#ff6a4d;--role-admin-bg:#3a1f1a;--role-engineer-bg:#15283d;--role-non-technical-bg:#232831;--ok:#4cc38a;--ok-bg:#12291d;--warn:#e0b341;--warn-bg:#2d2412;--bad:#ff7b6e;--bad-bg:#331714;--chip:#232831}}
 *{box-sizing:border-box}body{margin:0;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;background:var(--bg);color:var(--text)}
 a{color:inherit}header{background:var(--card);border-bottom:1px solid var(--line)}
 .bar{max-width:1040px;margin:0 auto;padding:12px 16px;display:flex;gap:20px;align-items:center;flex-wrap:wrap}
@@ -56,6 +56,7 @@ form.inline{display:inline-flex;gap:6px;align-items:center;margin:0}form.inline 
 code{background:var(--chip);padding:1px 6px;border-radius:5px;font-size:13px;word-break:break-all}
 .timeline{list-style:none;padding:0;margin:0}.timeline li{padding:8px 0;border-bottom:1px solid var(--line)}
 .now{outline:2px solid var(--accent);outline-offset:-2px}
+tr.role-admin>td{background:var(--role-admin-bg)}tr.role-engineer>td{background:var(--role-engineer-bg)}tr.role-non_technical>td{background:var(--role-non-technical-bg)}
 @media (max-width:640px){.hide-sm{display:none}}
 .cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-top:1px solid var(--line);border-left:1px solid var(--line)}
 .cal>div{border-right:1px solid var(--line);border-bottom:1px solid var(--line);min-height:92px;padding:6px;min-width:0}
@@ -352,7 +353,7 @@ function notificationTable(rows) {
 
 export function teamPage({ user, members, inactive, flash }) {
   const admin = isAdmin(user);
-  const rows = members.map((m, i) => `<tr>
+  const rows = members.map((m, i) => `<tr class="role-${esc(m.role)}">
     <td>${i + 1}</td>
     <td>${personCell(m, ` <span class="pill">${esc(ROLE_LABELS[m.role] || m.role)}</span>`)}<div class="small muted">${esc(m.email)}</div></td>
     <td class="small hide-sm">${m.slack_user_id ? `<code>${esc(m.slack_user_id)}</code>` : '<span class="pill failed">not linked</span>'}</td>
