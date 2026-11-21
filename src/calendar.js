@@ -62,7 +62,7 @@ export const feedToken = () =>
   crypto.createHmac('sha256', config.sessionSecret).update('calendar-feed-v1').digest('base64url').slice(0, 32);
 
 const icsDate = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-const icsText = (v) => String(v).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/([,;])/g, '\\$1');
+const icsText = (v) => String(v).replace(/\r\n|\r/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/([,;])/g, '\\$1');
 
 export async function icsFeed(deps) {
   const today = tzParts(new Date(), config.timezone);

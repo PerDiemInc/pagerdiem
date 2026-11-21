@@ -58,6 +58,8 @@ export function makeResponder(res) {
   };
 }
 
+const safeDecode = (v) => { try { return decodeURIComponent(v); } catch { return v; } };
+
 /** Routes like "/incidents/:id/ack". Handlers get (ctx) and return nothing. */
 export function makeRouter() {
   const routes = [];
@@ -70,7 +72,7 @@ export function makeRouter() {
     for (const r of routes) {
       if (r.method !== method) continue;
       const m = r.re.exec(path);
-      if (m) return { handler: r.handler, params: Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])])) };
+      if (m) return { handler: r.handler, params: Object.fromEntries(r.keys.map((k, i) => [k, safeDecode(m[i + 1])])) };
     }
     return null;
   };

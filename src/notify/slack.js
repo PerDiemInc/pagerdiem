@@ -50,8 +50,10 @@ export function verifySlackSignature(headers, rawBody, now = Date.now()) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+export const slackText = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
 export const mention = (user) =>
-  (/^[UW][A-Z0-9]{6,}$/.test(user?.slack_user_id || '') ? `<@${user.slack_user_id}>` : user?.name ?? 'nobody');
+  (/^[UW][A-Z0-9]{6,}$/.test(user?.slack_user_id || '') ? `<@${user.slack_user_id}>` : slackText(user?.name ?? 'nobody'));
 
 export const engineersTag = (fallback = '') =>
   (config.slack.engineersGroupId ? `<!subteam^${config.slack.engineersGroupId}>` : fallback);

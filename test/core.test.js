@@ -553,3 +553,28 @@ test('incidents left open for over a day stop paging and stop waking the databas
   await incidents.tick(new Date(later.getTime() + 60_000));
   assert.equal(queries, 0, 'and the next tick does not query');
 });
+
+test('incident text cannot inject Slack mentions or links', async () => {
+  const { db, rotation, notify, sent, addUser } = await setup();
+  await addUser('Ana');
+  config.slack.channel = 'CONCALL';
+  const incidents = makeIncidents({ db, rotation, notify });
+  await incidents.create({ title: '<!channel> <https://evil.example/login|Re-authenticate> & more' }, at('2026-11-18T15:00:00Z'));
+  const text = sent[0].text;
+  assert.ok(text.includes('&lt;!channel&gt; &lt;https://evil.example/login|Re-authenticate&gt; &amp; more'));
+  assert.ok(!text.includes('<https://evil.example'));
+  assert.ok(!text.includes('<!channel>'));
+});
+
+test('API dedupe stops matching once the old incident is no longer being paged', async () => {
+  const { db, rotation, notify, addUser } = await setup();
+  await addUser('Ana');
+  const incidents = makeIncidents({ db, rotation, notify });
+  const first = await incidents.create({ title: 'Checkout 5xx', dedupe: true }, at('2026-11-18T15:00:00Z'));
+  const soon = await incidents.create({ title: 'checkout 5xx', dedupe: true }, at('2026-11-18T16:00:00Z'));
+  assert.equal(soon.id, first.id);
+  assert.ok(soon.repeat);
+  const later = await incidents.create({ title: 'Checkout 5xx', dedupe: true }, at('2026-11-20T09:00:00Z'));
+  assert.notEqual(later.id, first.id, 'a day-old unacknowledged incident does not swallow a new alert');
+  assert.ok(!later.repeat);
+});

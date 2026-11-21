@@ -125,6 +125,50 @@ test('removing a teammate signs them out everywhere and blocks sign-in until the
   assert.equal((await fetch(base + '/calendar', { headers: { cookie: benCookie }, redirect: 'manual' })).status, 200, 'back in once re-added');
 });
 
+test('hardening: bad URLs and cookies, redirects, cross-site posts, Slack guests, last admin, names', async () => {
+  const login = async (email) => cookieOf(await post('/login', form({ email, password: 'longenough123' })));
+  const ana = await login('ana@example.com');
+  const anaRow = await app.db.get("SELECT id FROM users WHERE email = 'ana@example.com'");
+
+  const odd = await fetch(base + '//', { redirect: 'manual' });
+  assert.ok([400, 404].includes(odd.status), 'a request target of // is refused, not fatal');
+  assert.equal((await fetch(base + '/healthz')).status, 200, 'the server is still up');
+
+  assert.equal((await fetch(base + '/login', { headers: { cookie: 'x=%E0%A4%A' } })).status, 200, 'malformed cookie encoding is ignored');
+  assert.equal((await fetch(base + '/incidents/%E0%A4%A', { headers: { cookie: ana }, redirect: 'manual' })).status, 404);
+
+  for (const back of ['https://evil.example/phish', '//evil.example', '/\\evil.example']) {
+    const res = await post('/swaps/999/undo', form({ back }), { cookie: ana });
+    assert.equal(res.headers.get('location'), '/calendar', `back=${back} is not followed`);
+  }
+
+  const crossSite = await post('/incidents', form({ title: 'csrf' }), { cookie: ana, 'sec-fetch-site': 'cross-site' });
+  assert.equal(crossSite.status, 403);
+  const foreignOrigin = await post('/incidents', form({ title: 'csrf' }), { cookie: ana, origin: 'https://evil.example' });
+  assert.equal(foreignOrigin.status, 403);
+  assert.equal((await post('/incidents', form({ title: 'same site' }), { cookie: ana, 'sec-fetch-site': 'same-origin', origin: base })).status, 303);
+
+  const incidentId = (await app.db.get("SELECT id FROM incidents WHERE title = 'same site'")).id;
+  const signed = (body) => {
+    const ts = String(Math.floor(Date.now() / 1000));
+    const sig = 'v0=' + crypto.createHmac('sha256', 'slack-secret').update(`v0:${ts}:${body}`).digest('hex');
+    return { 'x-slack-request-timestamp': ts, 'x-slack-signature': sig };
+  };
+  const payload = encodeURIComponent(JSON.stringify({ user: { id: 'UGUEST0001' }, actions: [{ action_id: 'resolve', value: String(incidentId) }] }));
+  const body = `payload=${payload}`;
+  assert.equal((await post('/slack/interactions', body, signed(body))).status, 200);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.notEqual((await app.db.get('SELECT status FROM incidents WHERE id = ?', [incidentId])).status, 'resolved', 'a Slack user with no account cannot resolve');
+
+  await post(`/team/${anaRow.id}/active`, form({ active: '0' }), { cookie: ana });
+  assert.equal((await app.db.get('SELECT active FROM users WHERE id = ?', [anaRow.id])).active, 1, 'the last admin cannot be removed');
+
+  await post('/profile', form({ name: 'Ana\rATTACH:<!channel>', slack: 'U0ANA12345', whatsapp: '+14155550100' }), { cookie: ana });
+  const renamed = (await app.db.get('SELECT name FROM users WHERE id = ?', [anaRow.id])).name;
+  assert.doesNotMatch(renamed, /[\r\n<>]/);
+  await app.db.run("UPDATE users SET name = 'Ana Admin' WHERE id = ?", [anaRow.id]);
+});
+
 test('login rejects a wrong password and accepts the right one', async () => {
   let res = await post('/login', form({ email: 'ana@example.com', password: 'nope' }));
   assert.equal(res.status, 400);
