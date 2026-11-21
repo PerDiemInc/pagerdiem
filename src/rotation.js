@@ -162,6 +162,10 @@ export function makeRotation(db, shifts, { perWeekend = 2 } = {}) {
   /** Remove yourself from a weekend. Returns { changed }. */
   async function leave(shift, user, now = new Date()) {
     if (shift.end <= now) throw Object.assign(new Error('That weekend is already over.'), { status: 400 });
+    // Dropping out mid-weekend would leave it uncovered with nobody told; someone has to take the spot instead.
+    if (shift.start <= now) {
+      throw Object.assign(new Error('That weekend has already started. Ask in #on-call for cover — someone can take your spot.'), { status: 400 });
+    }
     const entry = await forShift(shift);
     if (!entry.people.some((p) => p.id === user.id)) return { changed: false, entry };
     await setStatus(shift.key, user.id, 'out', now);

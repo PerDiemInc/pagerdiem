@@ -180,9 +180,10 @@ function personCell(u, extra = '') {
 const names = (people) => people.map((p) => esc(p.name)).join(' & ');
 
 /** "Add me" / "Remove me" for the signed-in user only. */
-function selfButton(user, e, back = '') {
-  if (e.shift.end <= new Date() || !isResponder(user)) return '';
+function selfButton(user, e, back = '', now = new Date()) {
+  if (e.shift.end <= now || !isResponder(user)) return '';
   const on = e.people.some((p) => p.id === user.id);
+  if (on && e.shift.start <= now) return ''; // can't leave a running weekend; someone takes the spot instead
   const hidden = back ? `<input type="hidden" name="back" value="${back}">` : '';
   return on
     ? `<form method="post" action="/weekends/${e.shift.key}/leave" class="inline">${hidden}<button class="sm">Remove me</button></form>`
@@ -197,12 +198,17 @@ function peopleCell(e, perWeekend) {
   return `<div class="row" style="gap:12px">${chips || '<span class="muted">Nobody yet</span>'}${cover}</div>`;
 }
 
-export function dashboardPage({ user, now, onCall, nextEntry, backup, schedule, perWeekend, balance, recentLog, openIncidents, flash }) {
+export function dashboardPage({ user, now, onCall, runningShift, nextEntry, backup, schedule, perWeekend, balance, recentLog, openIncidents, flash }) {
   const tz = config.timezone;
   const hero = onCall
     ? `<div class="hero"><div class="avatar">📟</div><div>
         <div class="muted small">On call right now</div><div class="big">${names(onCall.people)}</div>
         <div class="muted small">Until ${esc(fmt(onCall.shift.end))}${backup ? ` · backup ${esc(backup.name)}` : ''}</div></div></div>`
+    : runningShift
+    ? `<div class="hero"><div class="avatar">⚠️</div><div>
+        <div class="muted small">Nobody is on call this weekend</div>
+        <div class="big">Pages go to the team channel and the admins</div>
+        <div class="muted small">Until ${esc(fmt(runningShift.end))} · add yourself below to cover it</div></div></div>`
     : `<div class="hero"><div class="avatar">💤</div><div>
         <div class="muted small">Nobody is on call right now — it's a weekday</div>
         <div class="big">${nextEntry?.people.length ? `Next: ${names(nextEntry.people)}` : 'Next weekend needs cover'}</div>
@@ -213,7 +219,7 @@ export function dashboardPage({ user, now, onCall, nextEntry, backup, schedule, 
     return `<tr class="${isNow ? 'now' : ''}">
       <td><strong>${esc(formatRange(e.shift, tz))}</strong><div class="small muted">${esc(fmt(e.shift.start))} → ${esc(fmt(e.shift.end))}</div></td>
       <td>${peopleCell(e, perWeekend)}</td>
-      <td style="text-align:right">${selfButton(user, e)}${isNow ? ' <span class="pill open">now</span>' : ''}</td>
+      <td style="text-align:right">${selfButton(user, e, '', now)}${isNow ? ' <span class="pill open">now</span>' : ''}</td>
     </tr>`;
   }).join('');
 
@@ -418,6 +424,7 @@ export function messagePage({ user, title, message, link }) {
 function personAction(user, e, p) {
   if (e.shift.end <= new Date() || !isResponder(user)) return '';
   if (p.id === user.id) {
+    if (e.shift.start <= new Date()) return ''; // can't leave a running weekend; someone takes the spot instead
     return `<form method="post" action="/weekends/${e.shift.key}/leave" class="inline"><input type="hidden" name="back" value="calendar"><button class="sm">Remove me</button></form>`;
   }
   if (e.people.some((x) => x.id === user.id)) return ''; // you're already on this weekend

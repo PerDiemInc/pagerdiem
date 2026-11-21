@@ -319,3 +319,237 @@ test('channel messages tag whoever is on call', async () => {
   await incidents.resolve(inc.id, ana, 'web');
   assert.match(sent.find((m) => m.to === 'CONCALL').text, /resolved by <@UANA000000>\. cc <@UBEN000000> \(on call\)/);
 });
+
+test('two acknowledgements at the same moment announce it once', async () => {
+  const { db, rotation, notify, sent, addUsers } = await setup();
+  const [ana, ben] = await addUsers('Ana', 'Ben', 'Cal');
+  config.slack.channel = 'CONCALL';
+  const incidents = makeIncidents({ db, rotation, notify });
+  const inc = await incidents.create({ title: 'Checkout down' }, at('2026-11-21T15:00:00Z'));
+
+  sent.length = 0;
+  const [a, b] = await Promise.all([incidents.acknowledge(inc.id, ana, 'web'), incidents.acknowledge(inc.id, ben, 'slack')]);
+  assert.equal([a, b].filter((r) => r.changed).length, 1, 'only one acknowledgement wins');
+  assert.equal(sent.filter((m) => m.to === 'CONCALL').length, 1, 'one "acknowledged" post');
+  assert.equal((await incidents.events(inc.id)).filter((e) => e.message.startsWith('Acknowledged')).length, 1);
+});
+
+test('two scheduler runs escalating at the same moment page the backup once', async () => {
+  const { db, rotation, notify, sent, addUsers } = await setup();
+  await addUsers('Ana', 'Ben', 'Cal');
+  config.slack.channel = 'CONCALL';
+  const incidents = makeIncidents({ db, rotation, notify });
+  const t0 = at('2026-11-21T15:00:00Z');
+  await incidents.create({ title: 'Checkout down' }, t0);
+
+  sent.length = 0;
+  const t15 = new Date(t0.getTime() + 15 * 60_000);
+  await Promise.all([incidents.tick(t15), incidents.tick(t15)]);
+  assert.equal(sent.filter((m) => m.to === 'UCAL000000').length, 1, 'backup paged once');
+});
+
+test('a tick never pages for an incident acknowledged while it was running', async () => {
+  const { db, rotation, notify, sent, addUsers } = await setup();
+  const [ana] = await addUsers('Ana', 'Ben', 'Cal');
+  config.slack.channel = 'CONCALL';
+  const incidents = makeIncidents({ db, rotation, notify });
+  const t0 = at('2026-11-21T15:00:00Z');
+  const inc = await incidents.create({ title: 'Checkout down' }, t0);
+
+  // Someone acknowledges after the tick has read the open incidents but before it acts on them.
+  const racing = { ...db, all: async (sql, params) => {
+    const rows = await db.all(sql, params);
+    if (sql.includes("FROM incidents WHERE status = 'open'")) await incidents.acknowledge(inc.id, ana, 'web');
+    return rows;
+  } };
+  sent.length = 0;
+  await makeIncidents({ db: racing, rotation, notify }).tick(new Date(t0.getTime() + 15 * 60_000));
+  assert.equal(sent.filter((m) => m.to === 'UCAL000000').length, 0, 'backup not paged after the ack');
+});
+
+test('the same alert while an incident is still open joins it instead of paging again', async () => {
+  const { db, rotation, notify, sent, addUsers } = await setup();
+  const [ana] = await addUsers('Ana', 'Ben', 'Cal');
+  config.slack.channel = 'CONCALL';
+  const incidents = makeIncidents({ db, rotation, notify });
+  const t0 = at('2026-11-21T15:00:00Z');
+  const first = await incidents.create({ title: 'Checkout down', source: 'api', dedupe: true }, t0);
+
+  sent.length = 0;
+  const again = await incidents.create({ title: '  checkout DOWN ', source: 'api', dedupe: true }, new Date(t0.getTime() + 60_000));
+  assert.equal(again.id, first.id, 'same incident');
+  assert.equal(again.repeat, true);
+  assert.equal(sent.length, 0, 'nobody paged again');
+  assert.ok((await incidents.events(first.id)).some((e) => e.message === 'Same alert again via api'));
+
+  await incidents.acknowledge(first.id, ana, 'slack');
+  assert.equal((await incidents.create({ title: 'Checkout down', source: 'api', dedupe: true }, t0)).id, first.id, 'still joins while acknowledged');
+
+  await incidents.resolve(first.id, ana, 'web');
+  const fresh = await incidents.create({ title: 'Checkout down', source: 'api', dedupe: true }, new Date(t0.getTime() + 120_000));
+  assert.notEqual(fresh.id, first.id, 'a resolved incident starts over');
+  assert.notEqual(fresh.repeat, true);
+
+  const manual = await incidents.create({ title: 'Checkout down', source: 'web', createdBy: ana.id }, new Date(t0.getTime() + 180_000));
+  assert.notEqual(manual.id, fresh.id, 'a person paging on purpose always pages');
+});
+
+test('after the @channel, paging keeps going every 5 min until someone acknowledges', async () => {
+  const { db, rotation, notify, sent, addUsers } = await setup();
+  const [ana] = await addUsers('Ana', 'Ben', 'Cal');
+  config.slack.channel = 'CONCALL';
+  const incidents = makeIncidents({ db, rotation, notify });
+  const t0 = at('2026-11-21T15:00:00Z');
+  const inc = await incidents.create({ title: 'Checkout down' }, t0);
+  const after = (min) => new Date(t0.getTime() + min * 60_000);
+  for (const min of [5, 10, 15, 20, 25, 30]) await incidents.tick(after(min));
+  assert.equal((await incidents.get(inc.id)).escalation_level, 2);
+
+  sent.length = 0;
+  await incidents.tick(after(35));
+  for (const id of ['UANA000000', 'UBEN000000', 'UCAL000000']) assert.ok(sent.some((m) => m.to === id), `${id} paged again at 35 min`);
+  sent.length = 0;
+  await incidents.tick(after(37));
+  assert.equal(sent.length, 0, 'not before the next 5 minutes');
+  await incidents.tick(after(40));
+  assert.ok(sent.some((m) => m.to === 'UCAL000000'), 'and again at 40 min');
+
+  await incidents.acknowledge(inc.id, ana, 'web');
+  sent.length = 0;
+  await incidents.tick(after(45));
+  assert.equal(sent.length, 0);
+});
+
+test('a weekend with nobody on call pages the admins, then the backup, then the channel', async () => {
+  const { db, rotation, notify, sent, addUsers } = await setup();
+  const [ana, ben, cal] = await addUsers('Ana', 'Ben', 'Cal', 'Dee');
+  await db.run("UPDATE users SET role = 'admin', is_admin = 1 WHERE id = ?", [ana.id]);
+  const wk = shifts.forKey('2026-11-20'); // Ben + Cal, until they both drop out before it starts
+  await rotation.leave(wk, ben, at('2026-11-19T12:00:00Z'));
+  await rotation.leave(wk, cal, at('2026-11-19T12:00:00Z'));
+  config.slack.channel = 'CONCALL';
+  const incidents = makeIncidents({ db, rotation, notify });
+  const t0 = at('2026-11-21T15:00:00Z');
+  const after = (min) => new Date(t0.getTime() + min * 60_000);
+
+  const inc = await incidents.create({ title: 'Checkout down' }, t0);
+  assert.deepEqual(sent.map((m) => m.to), ['CONCALL']);
+  assert.match(sent[0].text, /<!here>.*nobody is on call this weekend/);
+
+  sent.length = 0;
+  await incidents.tick(after(5));
+  assert.ok(sent.some((m) => m.to === 'UANA000000'), 'admin paged at 5 min');
+
+  const backup = await rotation.userById((await incidents.get(inc.id)).backup_user_id);
+  assert.ok(backup, 'there is a backup');
+  sent.length = 0;
+  await incidents.tick(after(15));
+  assert.ok(sent.some((m) => m.to === backup.slack_user_id), 'backup paged at 15 min');
+
+  sent.length = 0;
+  await incidents.tick(after(30));
+  assert.ok(sent.some((m) => m.to === 'CONCALL' && m.text.includes('<!channel>')));
+  sent.length = 0;
+  await incidents.tick(after(35));
+  assert.ok(sent.some((m) => m.to === 'UANA000000') && sent.some((m) => m.to === backup.slack_user_id), 'still paging after the @channel');
+});
+
+test('weekday incidents get a channel reminder every 30 min until someone takes them', async () => {
+  const { db, rotation, notify, sent, addUser } = await setup();
+  await addUser('Ana');
+  config.slack.channel = 'CONCALL';
+  const incidents = makeIncidents({ db, rotation, notify });
+  const t0 = at('2026-11-18T15:00:00Z'); // Wednesday
+  const after = (min) => new Date(t0.getTime() + min * 60_000);
+  await incidents.create({ title: 'Slow API' }, t0);
+
+  sent.length = 0;
+  await incidents.tick(after(29));
+  assert.equal(sent.length, 0);
+  await incidents.tick(after(30));
+  assert.deepEqual(sent.map((m) => m.to), ['CONCALL']);
+  assert.match(sent[0].text, /<!here>.*still/);
+  sent.length = 0;
+  await incidents.tick(after(45));
+  assert.equal(sent.length, 0, 'every 30 min, not every 5');
+  await incidents.tick(after(60));
+  assert.equal(sent.length, 1);
+});
+
+test('nobody can remove themselves from a weekend that has already started', async () => {
+  const { rotation, addUsers } = await setup();
+  const [ana, ben, cal] = await addUsers('Ana', 'Ben', 'Cal');
+  const wk = shifts.forKey('2026-11-20'); // Ana + Ben
+  await assert.rejects(rotation.leave(wk, ana, at('2026-11-21T15:00:00Z')), /already started/);
+  assert.deepEqual((await rotation.forShift(wk)).people.map((p) => p.name), ['Ana', 'Ben']);
+  // Someone else can still take the spot, and joining a running weekend is fine.
+  await rotation.swap(wk, cal, ana.id, at('2026-11-21T15:00:00Z'));
+  assert.deepEqual((await rotation.forShift(wk)).people.map((p) => p.name), ['Ben', 'Cal']);
+});
+
+test('the home page says a running weekend has nobody on call, and offers no Remove me on it', async () => {
+  const views = await import('../src/views.js');
+  const now = at('2026-11-21T15:00:00Z');
+  const running = shifts.current(now);
+  const user = { id: 1, name: 'Ana', is_admin: 0 };
+  const html = views.dashboardPage({
+    user, now, onCall: null, runningShift: running,
+    nextEntry: { shift: running, people: [], joined: [], needsCover: true },
+    backup: null, schedule: [{ shift: running, people: [user], joined: [], needsCover: true }],
+    perWeekend: 2, balance: [], recentLog: [], openIncidents: [], flash: null,
+  });
+  assert.doesNotMatch(html, /it's a weekday/);
+  assert.match(html, /Nobody is on call this weekend/);
+  assert.doesNotMatch(html, /Remove me/);
+});
+
+test('when nothing is going on, the scheduler leaves the database alone so it can sleep', async () => {
+  const { db: realDb, addUsers } = await setup();
+  let queries = 0;
+  const db = Object.fromEntries(['get', 'all', 'run'].map((k) => [k, async (...a) => { queries += 1; return realDb[k](...a); }]));
+  Object.assign(db, { dialect: realDb.dialect, close: realDb.close });
+  await addUsers('Ana', 'Ben', 'Cal');
+  config.slack.channel = 'CONCALL';
+  const { createApp } = await import('../src/app.js');
+  const app = createApp({ db, notifierOverrides: { slack: async () => {} } });
+  const quietMinutes = async (startIso) => {
+    const t = at(startIso);
+    await app.scheduler.runOnce(t); // first look after a (re)start, or the moment something is due
+    queries = 0;
+    for (let m = 1; m <= 5; m++) await app.scheduler.runOnce(new Date(t.getTime() + m * 60_000));
+    return queries;
+  };
+
+  assert.equal(await quietMinutes('2026-11-18T15:00:00Z'), 0, 'a quiet Wednesday');
+  assert.equal(await quietMinutes('2026-11-20T00:00:00Z'), 0, 'after the Thursday reminders went out');
+  assert.equal(await quietMinutes('2026-11-21T15:00:00Z'), 0, 'a quiet Saturday after the shift started');
+
+  // An open incident is checked every minute until someone acknowledges it.
+  const inc = await app.incidents.create({ title: 'Checkout down' }, at('2026-11-21T16:00:00Z'));
+  queries = 0;
+  await app.scheduler.runOnce(at('2026-11-21T16:01:00Z'));
+  assert.ok(queries > 0, 'open incident is checked');
+  const ana = await app.rotation.userById(inc.assigned_user_id);
+  await app.incidents.acknowledge(inc.id, ana, 'web');
+  assert.equal(await quietMinutes('2026-11-21T16:02:00Z'), 0, 'quiet again once acknowledged');
+});
+
+test('incidents left open for over a day stop paging and stop waking the database', async () => {
+  const { db, rotation, notify, sent, addUsers } = await setup();
+  await addUsers('Ana', 'Ben', 'Cal');
+  config.slack.channel = 'CONCALL';
+  let queries = 0;
+  const counted = Object.fromEntries(['get', 'all', 'run'].map((k) => [k, async (...a) => { queries += 1; return db[k](...a); }]));
+  const incidents = makeIncidents({ db: counted, rotation, notify });
+  const t0 = at('2026-11-21T15:00:00Z');
+  await incidents.create({ title: 'Forgotten test page' }, t0);
+  await incidents.create({ title: 'Old weekday alert' }, at('2026-11-18T15:00:00Z'));
+
+  sent.length = 0;
+  const later = new Date(t0.getTime() + 25 * 3_600_000);
+  await incidents.tick(later);
+  assert.equal(sent.length, 0, 'nobody is paged about day-old incidents');
+  queries = 0;
+  await incidents.tick(new Date(later.getTime() + 60_000));
+  assert.equal(queries, 0, 'and the next tick does not query');
+});
