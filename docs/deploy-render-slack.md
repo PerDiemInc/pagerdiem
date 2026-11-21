@@ -92,6 +92,7 @@ The sign-in page now shows **Sign in with Google**. Sign in first: the first per
    | Key | Value |
    |---|---|
    | `SLACK_ONCALL_CHANNEL` | the channel ID |
+   | `SLACK_ONCALL_CHANNEL_NAME` | optional: the channel's name, shown in messages (default `on-call`) |
    | `SLACK_TEAM_ID` | your workspace ID, starting with `T`. It's in the URL of your Slack app settings page. |
    | `SLACK_ENGINEERS_GROUP_ID` | optional: a user group ID (`S…`) to tag when an incident starts |
 

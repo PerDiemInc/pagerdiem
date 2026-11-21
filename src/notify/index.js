@@ -40,10 +40,10 @@ export function makeNotifier(db, overrides = {}) {
   async function channel({ text, blocks, incidentId }) {
     const target = config.slack.channel;
     if (send.slack && target) {
-      return deliver('slack', `#on-call (${target})`, text, () => send.slack(target, text, blocks), incidentId);
+      return deliver('slack', `#${config.slack.channelName} (${target})`, text, () => send.slack(target, text, blocks), incidentId);
     }
     if (send.slack) return { ok: false, skipped: true }; // Slack is set up but no channel chosen
-    return deliver('slack', '#on-call', text, null, incidentId);
+    return deliver('slack', `#${config.slack.channelName}`, text, null, incidentId);
   }
 
   return { user, channel };

@@ -650,3 +650,14 @@ test('coverage and domain settings are validated', () => {
   assert.equal(describeDays([1, 2, 3, 4, 5]), 'Mon–Fri');
   assert.equal(describeDays([0, 1, 2, 3, 4, 5, 6]), 'every day');
 });
+
+test('the channel name shown in messages comes from the environment setting', async () => {
+  const { rotation, addUser } = await setup();
+  const ana = await addUser('Ana');
+  config.slack.channelName = 'incidents';
+  try {
+    await assert.rejects(rotation.leave(shifts.forKey('2026-11-20'), ana, at('2026-11-21T12:00:00Z')), /Ask in #incidents for cover/);
+  } finally {
+    config.slack.channelName = 'on-call';
+  }
+});
