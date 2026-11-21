@@ -1,129 +1,142 @@
 # PagerDiem 📟
 
-A small, self-hosted, PagerDuty-style on-call tool for one engineering team. Each weekend gets two
-people from a fair rotation, anyone can add themselves, and pages reach whoever is on call on
-**Slack**. Sign-in is limited to your company's Google Workspace.
+**Self-hosted weekend on-call for small engineering teams.** A fair rotation, Slack paging with
+escalation, a shared calendar, and sign-in locked to your Google Workspace. One Node.js process,
+one database, no per-seat pricing.
 
-Built at [Per Diem](https://tryperdiem.com) for our own weekend rotation, and open-sourced so any team can run it.
+![On-call dashboard](docs/images/dashboard.jpg)
+
+## Why
+
+Paging tools are built for large incident-response orgs and priced per seat. Many small teams just
+need: *who's on call this weekend, and how do we reach them when something breaks?* PagerDiem does
+exactly that, and you can run it for free.
 
 ## Features
 
-- **Your team only:** sign in with Google, limited to your Google Workspace email domain (`ALLOWED_EMAIL_DOMAINS`). Personal Gmail and other companies' accounts are refused. New teammates add their own Slack account and phone number; no two people can share either.
-- **Weekend rotation:** by default Friday 18:00 → Monday 09:00 in your time zone. The rotation puts **2 people** on each weekend (`PEOPLE_PER_WEEKEND`), taking turns so everyone gets the same number of weekends. Admins are optional: they aren't assigned automatically but can add themselves.
-- **Self-service:** anyone can **add themselves** to any weekend (no limit) and **remove themselves** from one. A weekend with fewer than 2 people is flagged "needs cover".
-- **Swap:** on the calendar, "Swap" next to someone's name takes their spot. You can undo it for 10 seconds; they and Slack are told only after that.
-- **Audit log:** every add, remove and swap, grouped by date, visible to the whole team.
-- **Calendar:** month view plus a feed you can subscribe to in Google Calendar.
-- **Reminders:** each on-call person gets a Slack heads-up 24 hours before, and a message when the weekend starts. The channel gets a hand-off summary when it ends.
-- **Paging:** from the web app, Slack (`/page checkout is down`) or the API (Sentry, Coralogix, CI…).
-  1. Everyone on call is paged by Slack DM (with Acknowledge / Resolve buttons), and the page is posted in your on-call channel.
-  2. If nobody acknowledges, they're paged again every 5 minutes.
-  3. After 15 minutes the **backup** (next weekend's first person) is paged too.
-  4. After 30 minutes the whole channel gets an `@channel` alert.
-  5. On weekdays nobody is on call, so a page goes to the channel with `@here`.
-- **Acknowledge** from the Slack button or in the web app; **Resolve** closes the incident. `/oncall` in Slack shows who's on call.
+| | |
+|---|---|
+| **Fair weekend rotation** | Two people per weekend by default (`PEOPLE_PER_WEEKEND`), taking turns so everyone gets the same share. Weekends run Friday 18:00 → Monday 09:00 in your time zone (configurable). |
+| **Self-service** | Anyone can **add themselves** to a weekend (no limit) or **remove themselves**. Weekends below the target are flagged *needs cover*. |
+| **Swap with undo** | On the calendar, **Swap** next to a name takes that person's spot. You get 10 seconds to undo before they and Slack are told. |
+| **Slack paging** | Page from the web app, `/page <what broke>` in Slack, or the HTTP API. Everyone on call gets a DM with **Acknowledge / Resolve** buttons; the channel is told, with on-call people @-tagged. |
+| **Escalation** | No acknowledgement → re-page every 5 min → page the backup at 15 min → `@channel` at 30 min. On weekdays pages go straight to the channel. |
+| **Reminders** | DM 24 hours before your weekend, a "you're on call now" DM when it starts, and a hand-off summary in the channel when it ends. |
+| **Calendar** | Month view of who's on call, plus a feed you can subscribe to from Google Calendar. |
+| **Audit log** | Every add, remove and swap, grouped by day, visible to the whole team. |
+| **Your team only** | Google sign-in restricted to your Workspace domain. Personal Gmail and other companies are refused. |
+| **Roles** | *Admin* and *Engineer* can be on call and respond. *Non-technical* teammates (leadership, support, product) can view everything and raise an alert, but are never put on call. |
 
-Node 22.13+. Local runs use the built-in `node:sqlite`; the only package is `pg`, for Postgres in production.
+<table>
+<tr>
+<td><img src="docs/images/calendar.jpg" alt="Calendar view"></td>
+<td><img src="docs/images/audit-log.jpg" alt="Audit log"></td>
+</tr>
+<tr>
+<td align="center">Calendar: two people per weekend, colour-coded</td>
+<td align="center">Audit log: every add, remove and swap</td>
+</tr>
+</table>
 
-## Run it locally
+![Incident with timeline](docs/images/incident.jpg)
+
+## Quick start (local)
+
+Requires Node.js 22.13+ (uses the built-in `node:sqlite`).
 
 ```bash
+git clone <this repo> && cd pagerdiem
 cp .env.example .env
-npm start
-```
-
-Open http://localhost:3000 and sign up (locally, without Google keys, it uses email + password). The first person to sign up is an admin.
-With no Slack credentials the app runs in **dry-run mode**: messages are logged to the console and shown under **Settings → Recent messages**.
-
-```bash
+npm install
+npm start          # http://localhost:3000
 npm test
 ```
 
+Locally, without Google or Slack keys, PagerDiem uses email + password sign-in and runs Slack in
+**dry-run mode**: every message is recorded under **Settings → Recent messages** instead of being
+sent. The first person to sign up becomes an admin.
+
+## Deploy
+
+| Guide | What you get | Cost |
+|---|---|---|
+| [Render + Neon + Slack](docs/deploy-render-slack.md) | Easiest. Docker web service on Render, Postgres on Neon, the Slack app, Google sign-in. | Free tiers |
+| [AWS (ECS Fargate + RDS)](docs/deploy-aws.md) | Always-on container behind a load balancer, managed Postgres, secrets in Secrets Manager. | About $35–45/month |
+
+Run **exactly one instance**: the scheduler (reminders, escalation) runs inside the web process.
+
 ## Configuration
 
-Everything about your company lives in environment settings; nothing is hard-coded. See [.env.example](.env.example) for the full list.
+Everything company-specific is an environment variable. See [.env.example](.env.example).
 
-| Setting | Required | What it is |
+| Variable | Required | Description |
 |---|---|---|
-| `ALLOWED_EMAIL_DOMAINS` | in production | Your Google Workspace email domain(s), e.g. `example.com` |
-| `TEAM_NAME` | | Shown on the sign-in page and calendar feed, e.g. `Example Engineering` |
-| `APP_NAME` | | Defaults to `PagerDiem` |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | in production | Google sign-in (below) |
-| `DATABASE_URL` | in production | Postgres connection string |
-| `SESSION_SECRET` | in production | Long random string |
-| `PUBLIC_URL` | | The app's public address (set automatically on Render) |
-| `TEAM_TIMEZONE`, `SHIFT_START`, `SHIFT_END` | | Defaults `America/New_York`, `FRI 18:00`, `MON 09:00` |
-| `PEOPLE_PER_WEEKEND` | | Defaults to `2` |
-| `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_ONCALL_CHANNEL`, `SLACK_TEAM_ID` | | Slack (below) |
-| `WHATSAPP_GROUP_URL` | | Your team's WhatsApp group invite link, shown as a Join button to signed-in teammates |
-| `API_TOKEN` | | Bearer token for the API |
+| `ALLOWED_EMAIL_DOMAINS` | production | Your Google Workspace email domain(s), comma-separated, e.g. `example.com` |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | production | Google OAuth client (Web application). Without them, production lets nobody in. |
+| `DATABASE_URL` | production | Postgres connection string. Without it, a local SQLite file is used. |
+| `SESSION_SECRET` | production | Long random string (signs sessions and the calendar feed link) |
+| `PUBLIC_URL` | | The app's public URL. Set automatically on Render. |
+| `TEAM_NAME`, `APP_NAME` | | Shown on the sign-in page and calendar feed |
+| `TEAM_TIMEZONE`, `SHIFT_START`, `SHIFT_END` | | Defaults: `America/New_York`, `FRI 18:00`, `MON 09:00` |
+| `PEOPLE_PER_WEEKEND` | | Default `2` |
+| `REMINDER_HOURS_BEFORE`, `REPAGE_EVERY_MINUTES`, `ESCALATE_AFTER_MINUTES` | | Defaults `24`, `5`, `15` |
+| `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` | for Slack | From your Slack app |
+| `SLACK_ONCALL_CHANNEL` | for Slack | Channel ID for on-call posts (invite the bot) |
+| `SLACK_TEAM_ID` | recommended | Your Slack workspace ID. Requests from other workspaces are rejected. |
+| `SLACK_ENGINEERS_GROUP_ID` | | Slack user group (e.g. @engineers) tagged when an incident starts |
+| `API_TOKEN` | | Bearer token for the HTTP API |
+| `WHATSAPP_GROUP_URL` | | Optional team chat invite link, shown as a Join button |
+| `KEEP_AWAKE` | | Self-ping every 10 min to stop free hosts from sleeping. On by default on Render. |
 
-## Google sign-in (required in production)
+## Using it
 
-1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials), under your company's organization, set the **OAuth consent screen** audience to **Internal**. Google then only lets your Workspace accounts sign in.
-2. **Create credentials → OAuth client ID → Web application.** Add the redirect URI `{PUBLIC_URL}/auth/google/callback`.
-3. Put the client ID and secret in `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
+- **Slack:** `/oncall` shows who's on call now and the next weekends. `/page checkout is down` pages them.
+- **API:**
 
-The app also checks every sign-in itself: a verified email on one of `ALLOWED_EMAIL_DOMAINS`, on a Workspace-managed account. Without Google keys, production shows "Sign-in isn't set up yet" and lets nobody in.
+  ```bash
+  curl -X POST "$PUBLIC_URL/api/incidents" \
+    -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+    -d '{"title":"API 5xx spike","details":"p95 > 2s on /orders","source":"monitoring"}'
 
-## Connect Slack
+  curl "$PUBLIC_URL/api/oncall" -H "Authorization: Bearer $API_TOKEN"
+  ```
 
-1. https://api.slack.com/apps → **Create New App → From a manifest**, paste [slack-app-manifest.yml](slack-app-manifest.yml) after replacing `https://YOUR-APP.example.com` with your `PUBLIC_URL`.
-2. Install it to your workspace (the manifest turns on the app's Messages tab, which Slack requires for DMs). Copy the **Bot User OAuth Token** to `SLACK_BOT_TOKEN` and the **Signing Secret** (Basic Information) to `SLACK_SIGNING_SECRET`.
-3. Pick an on-call channel, run `/invite @PagerDiem` in it, and put its channel ID in `SLACK_ONCALL_CHANNEL`.
-4. Set `SLACK_TEAM_ID` to your workspace ID (it starts with `T`) so requests from any other workspace are rejected.
-
-## API
-
-```bash
-# Page whoever is on call
-curl -X POST "$PUBLIC_URL/api/incidents" \
-  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
-  -d '{"title":"API 5xx spike","details":"p95 > 2s on /orders","source":"monitoring"}'
-
-# Who's on call now and next
-curl "$PUBLIC_URL/api/oncall" -H "Authorization: Bearer $API_TOKEN"
-```
-
-## Deploy for free (Render + Neon)
-
-1. **Database:** create a free project at https://neon.tech and copy its connection string (`postgresql://…?sslmode=require`).
-2. **App:** on https://dashboard.render.com create a **Web Service** from your fork (Docker, Free plan), or use **New → Blueprint** with [render.yaml](render.yaml). Set the settings above; Render's **Generate** button works for `SESSION_SECRET` and `API_TOKEN`.
-3. Render's free plan sleeps after 15 idle minutes, which would delay reminders and escalation. The app pings its own URL every 10 minutes to stay awake (`KEEP_AWAKE`, on by default on Render).
-
-With `DATABASE_URL` set the app uses Postgres; without it, a local SQLite file. Run the tests against Postgres with `TEST_DATABASE_URL=postgres://… npm test` (it wipes that database).
-
-Docker works anywhere with a persistent volume:
-
-```bash
-docker build -t pagerdiem .
-docker run -d -p 3000:3000 -v pagerdiem-data:/data --env-file .env pagerdiem
-```
+  Point Sentry, Datadog, Grafana or CI alerts at `POST /api/incidents`.
 
 ## How the rotation works
 
-- The order is the **Team** page list; admins can reorder people or take them out.
-- Each weekend takes the next 2 non-admin people in order, so over a full cycle everyone gets the same number of weekends. The **Balance** box on the home page shows the counts.
-- When a weekend starts, the rotation's picks are saved. Future weekends are worked out from the last saved one, so people joining, leaving or being reordered never skips anyone or changes past weekends.
-- Adding yourself, removing yourself or swapping changes only that weekend.
+- The order is the **Team** page list; admins can reorder people, change roles or remove someone.
+- Each weekend takes the next two engineers in order, so over a full cycle everyone gets the same number of weekends. The **Balance** box on the home page shows the counts.
+- When a weekend starts, its picks are saved. Future weekends are projected from the last saved one, so people joining, leaving or being reordered never reshuffle past weekends.
+- Adding yourself, removing yourself or swapping only changes that one weekend.
+- The backup for a weekend is the first person on the next weekend who isn't already on call.
 
-## Code map
+## Security model
+
+- Production sign-in is Google only, restricted to `ALLOWED_EMAIL_DOMAINS` on a Workspace-managed account. Set the OAuth consent screen to **Internal** for a second lock at Google's end.
+- Slack requests are verified with the signing secret and, with `SLACK_TEAM_ID`, restricted to your workspace.
+- The API requires a bearer token. The calendar feed uses an unguessable link.
+- See [SECURITY.md](SECURITY.md) to report a vulnerability.
+
+## Development
+
+- Plain Node.js, no framework. The only runtime dependency is `pg`.
+- SQL runs on both SQLite (local, tests) and Postgres (production).
+- Tests: `npm test`, or against Postgres with `TEST_DATABASE_URL=postgres://… npm test` (wipes that database).
 
 | File | What it does |
 |---|---|
 | `src/time.js` | Weekend windows in the team time zone (DST-safe) |
-| `src/rotation.js` | Who's on call each weekend, add/remove yourself, swaps, audit log |
-| `src/incidents.js` | Page → re-page → backup → channel escalation, acknowledge, resolve |
-| `src/scheduler.js` | Every minute: reminders, weekend start/end messages, escalation, swap announcements |
-| `src/google.js` | Google sign-in limited to your Workspace domain |
-| `src/notify/` | Slack client, dry-run logging |
-| `src/app.js` | Web pages, Slack commands and buttons, API |
+| `src/rotation.js` | Rotation, add/remove yourself, swaps, audit log |
+| `src/incidents.js` | Page → re-page → backup → channel escalation |
+| `src/scheduler.js` | Once a minute: reminders, weekend start/end, escalation, swap announcements |
+| `src/google.js` | Google sign-in restricted to your Workspace |
+| `src/notify/` | Slack client and dry-run logging |
+| `src/app.js` | Routes: web pages, Slack commands and buttons, API |
 | `src/views.js` | HTML pages |
 
-## Contributing and security
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). Please report security issues privately as described in [SECURITY.md](SECURITY.md).
+Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Built at [Per Diem](https://tryperdiem.com) for our own weekend rotation.

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PagerDiem: self-hosted weekend on-call</title>
+<meta name="description" content="Open-source weekend on-call for small engineering teams: fair rotation, Slack paging with escalation, shared calendar, Google Workspace sign-in.">
+<meta property="og:title" content="PagerDiem: self-hosted weekend on-call">
+<meta property="og:description" content="Fair weekend rotation, Slack paging with escalation, calendar and audit log. One Node.js process. MIT licensed.">
+<meta property="og:image" content="images/dashboard.jpg">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📟</text></svg>">
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#16181d;--muted:#5f6673;--line:#e3e6eb;--accent:#e8492b;--accent-ink:#fff;--code:#0f1115;--code-ink:#e8eaee}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a20;--text:#e8eaee;--muted:#9aa1ad;--line:#2a2f38;--accent:#ff6a4d;--code:#0a0c10}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
+a{color:inherit}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+header{border-bottom:1px solid var(--line);background:var(--card)}
+header .wrap{display:flex;align-items:center;gap:16px;height:60px}
+.brand{display:flex;align-items:center;gap:9px;font-weight:700;font-size:18px;text-decoration:none}
+.brand i{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-style:normal;font-size:15px}
+header nav{margin-left:auto;display:flex;gap:20px;font-size:15px}
+header nav a{text-decoration:none;color:var(--muted)}header nav a:hover{color:var(--text)}
+.hero{padding:72px 0 40px;text-align:center}
+.hero h1{font-size:clamp(32px,5vw,52px);line-height:1.1;margin:0 0 18px;letter-spacing:-.02em}
+.hero p{font-size:clamp(17px,2.2vw,20px);color:var(--muted);max-width:680px;margin:0 auto 28px}
+.btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-block;padding:12px 20px;border-radius:10px;font-weight:600;text-decoration:none;border:1px solid var(--line);background:var(--card)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.shot{margin:40px auto 0;border-radius:14px;overflow:hidden;border:1px solid var(--line);box-shadow:0 20px 60px rgba(0,0,0,.12);max-width:1000px}
+.shot img{display:block;width:100%;height:auto}
+section{padding:56px 0}
+h2{font-size:28px;margin:0 0 8px;letter-spacing:-.01em}
+.lead{color:var(--muted);margin:0 0 28px}
+.grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+.card h3{margin:0 0 6px;font-size:17px}
+.card p{margin:0;color:var(--muted);font-size:15px}
+.pair{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.pair figure{margin:0}.pair img{width:100%;border-radius:12px;border:1px solid var(--line);display:block}
+.pair figcaption{color:var(--muted);font-size:14px;margin-top:8px;text-align:center}
+pre{background:var(--code);color:var(--code-ink);padding:18px 20px;border-radius:12px;overflow-x:auto;font-size:14px;line-height:1.55}
+.deploy .card a{font-weight:600}
+.tag{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:99px;background:var(--bg);border:1px solid var(--line);color:var(--muted);margin-bottom:10px}
+@media (max-width:560px){header nav a:not(:last-child){display:none}}
+footer{border-top:1px solid var(--line);padding:28px 0 48px;color:var(--muted);font-size:14px}
+footer .wrap{display:flex;gap:16px;flex-wrap:wrap;justify-content:space-between}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <a class="brand" href="#"><i>P</i>PagerDiem</a>
+  <nav><a href="#features">Features</a><a href="#deploy">Deploy</a><a href="https://github.com/PerDiemInc/pagerdiem">GitHub</a></nav>
+</div></header>
+
+<main>
+<div class="wrap hero">
+  <h1>Weekend on-call,<br>without the enterprise bill.</h1>
+  <p>A fair rotation, Slack paging with escalation, a shared calendar and sign-in locked to your Google Workspace.
+     One Node.js process. Self-hosted. MIT licensed.</p>
+  <div class="btns">
+    <a class="btn primary" href="https://github.com/PerDiemInc/pagerdiem">View on GitHub</a>
+    <a class="btn" href="#deploy">Deploy it</a>
+  </div>
+  <div class="shot"><img src="images/dashboard.jpg" alt="PagerDiem dashboard: who is on call now, open incidents and the weekend rotation" width="1284" height="722"></div>
+</div>
+
+<section id="features"><div class="wrap">
+  <h2>What it does</h2>
+  <p class="lead">The parts of on-call a small team actually uses.</p>
+  <div class="grid">
+    <div class="card"><h3>Fair weekend rotation</h3><p>Two people per weekend, taking turns so everyone gets the same share. Admins are optional.</p></div>
+    <div class="card"><h3>Self-service</h3><p>Add yourself to any weekend or remove yourself. Weekends below target are flagged “needs cover”.</p></div>
+    <div class="card"><h3>Swap with undo</h3><p>Take someone's spot from the calendar. Ten seconds to undo before anyone is notified.</p></div>
+    <div class="card"><h3>Slack paging</h3><p>Page from the web, <code>/page</code> in Slack or the API. DMs with Acknowledge and Resolve buttons.</p></div>
+    <div class="card"><h3>Escalation</h3><p>Re-page every 5 minutes, page the backup at 15, <code>@channel</code> at 30.</p></div>
+    <div class="card"><h3>Calendar &amp; audit log</h3><p>Month view, a Google Calendar feed, and a public log of every add, remove and swap.</p></div>
+    <div class="card"><h3>Your team only</h3><p>Google sign-in restricted to your Workspace domain. Slack requests limited to your workspace.</p></div>
+    <div class="card"><h3>Roles</h3><p>Engineers go on call. Non-technical teammates can watch and raise an alert, never paged.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="pair">
+    <figure><img src="images/calendar.jpg" alt="Calendar showing two people on call each weekend" loading="lazy"><figcaption>Calendar: two people per weekend, colour-coded</figcaption></figure>
+    <figure><img src="images/audit-log.jpg" alt="Audit log of adds, removes and swaps" loading="lazy"><figcaption>Audit log: every change, grouped by day</figcaption></figure>
+  </div>
+</div></section>
+
+<section id="deploy" class="deploy"><div class="wrap">
+  <h2>Deploy it</h2>
+  <p class="lead">Run exactly one instance; the scheduler lives inside the web process.</p>
+  <div class="grid">
+    <div class="card"><span class="tag">Free tiers</span><h3>Render + Neon + Slack</h3>
+      <p>Docker web service on Render, Postgres on Neon, plus the Slack app and Google sign-in. About 30 minutes.</p>
+      <p style="margin-top:12px"><a href="https://github.com/PerDiemInc/pagerdiem/blob/main/docs/deploy-render-slack.md">Read the guide →</a></p></div>
+    <div class="card"><span class="tag">≈ $35–45 / month</span><h3>AWS: ECS Fargate + RDS</h3>
+      <p>Always-on task behind an ALB, managed Postgres, secrets in Secrets Manager, logs in CloudWatch.</p>
+      <p style="margin-top:12px"><a href="https://github.com/PerDiemInc/pagerdiem/blob/main/docs/deploy-aws.md">Read the guide →</a></p></div>
+  </div>
+  <h3 style="margin:36px 0 8px">Or try it locally in a minute</h3>
+<pre><code>git clone https://github.com/PerDiemInc/pagerdiem && cd pagerdiem
+cp .env.example .env
+npm install && npm start      # http://localhost:3000 (dry-run, no keys needed)</code></pre>
+</div></section>
+</main>
+
+<footer><div class="wrap">
+  <span>PagerDiem is MIT licensed. Built at <a href="https://tryperdiem.com">Per Diem</a> for our own weekend rotation.</span>
+  <span><a href="https://github.com/PerDiemInc/pagerdiem">GitHub</a> · <a href="https://github.com/PerDiemInc/pagerdiem/blob/main/SECURITY.md">Security</a></span>
+</div></footer>
+</body>
+</html>
