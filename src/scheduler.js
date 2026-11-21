@@ -46,6 +46,11 @@ export function makeScheduler({ db, shifts, rotation, notify, incidents }) {
     if (!current) return;
     const entry = await rotation.lock(current);
     if (!(await claimOnce(db, `start:${current.key}`))) return;
+    await announceWeekendStart(current, entry);
+  }
+
+  /** "You're on call now" to each person, plus the channel post. */
+  async function announceWeekendStart(current, entry) {
     for (const person of entry.people) {
       await notify.user(person, {
         text: `:pager: You're on call now until ${fmt(current.end)}. Keep Slack and WhatsApp notifications on. Thank you!`,
@@ -106,5 +111,18 @@ export function makeScheduler({ db, shifts, rotation, notify, incidents }) {
   }
   const stop = () => clearInterval(timer);
 
-  return { runOnce, start, stop, addStep };
+  /**
+   * Send this weekend's "you're on call now" messages again (admin action, e.g. after
+   * Slack or WhatsApp was connected mid-weekend). Returns the people messaged, or null
+   * when no weekend is in progress.
+   */
+  async function resendWeekendStart(now = new Date()) {
+    const current = shifts.current(now);
+    if (!current) return null;
+    const entry = await rotation.lock(current);
+    await announceWeekendStart(current, entry);
+    return entry.people;
+  }
+
+  return { runOnce, start, stop, addStep, resendWeekendStart };
 }

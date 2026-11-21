@@ -292,8 +292,8 @@ export function createApp({ db, notifierOverrides } = {}) {
       const short = entry.needsCover ? ` :warning: Now ${entry.people.length}/${rotation.perWeekend} — needs cover.` : '';
       await notify.channel({
         text: action === 'join'
-          ? `:raised_hand: ${mention(ctx.user)} added themselves to the weekend of ${range}. On call: ${entry.people.map((p) => p.name).join(', ')}.`
-          : `:wave: ${mention(ctx.user)} removed themselves from the weekend of ${range}. On call: ${entry.people.map((p) => p.name).join(', ') || 'nobody'}.${short}`,
+          ? `:raised_hand: ${mention(ctx.user)} added themselves to the weekend of ${range}. On call: ${entry.people.map(mention).join(', ')}.`
+          : `:wave: ${mention(ctx.user)} removed themselves from the weekend of ${range}. On call: ${entry.people.map(mention).join(', ') || 'nobody'}.${short}`,
       });
       setFlash(ctx.r, 'ok', action === 'join' ? `You're on call for ${range}.` : `You're off ${range}.${entry.needsCover ? ' That weekend now needs cover.' : ''}`);
     }
@@ -533,6 +533,17 @@ export function createApp({ db, notifierOverrides } = {}) {
     setFlash(ctx.r, results.some((x) => !x.ok) ? 'error' : 'ok',
       `${summary}.${results.some((x) => !x.ok) ? ' See Settings → Recent messages for the error.' : ''}`);
     ctx.r.redirect('/team');
+  });
+
+  // Admin only: re-send this weekend's "you're on call now" messages.
+  router.post('/admin/resend-weekend-start', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    requireAdmin(ctx);
+    const people = await scheduler.resendWeekendStart();
+    setFlash(ctx.r, people ? 'ok' : 'error', people
+      ? `Re-sent "you're on call now" to ${people.map((p) => p.name).join(', ') || 'nobody (no one is on call)'}.`
+      : 'No weekend is in progress, so there is nothing to re-send.');
+    ctx.r.redirect('/settings');
   });
 
   router.get('/settings', async (ctx) => {

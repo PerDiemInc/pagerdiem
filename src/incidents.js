@@ -93,6 +93,13 @@ export function makeIncidents({ db, rotation, notify }) {
     return get(inc.id);
   }
 
+  /** " cc @a @b" for the people on call when the incident started (minus whoever acted). */
+  async function onCallTags(inc, actor) {
+    const onCall = await rotation.onCallNow(new Date(inc.created_at));
+    const others = (onCall?.people ?? []).filter((p) => p.id !== actor?.id);
+    return others.length ? ` cc ${others.map(mention).join(' ')} (on call)` : '';
+  }
+
   async function acknowledge(id, user, via = 'web', now = new Date()) {
     const inc = await get(id);
     if (!inc) throw new Error('Incident not found');
@@ -100,7 +107,7 @@ export function makeIncidents({ db, rotation, notify }) {
     (await db.run(`UPDATE incidents SET status = 'acknowledged', acked_at = ?, acked_by = ? WHERE id = ? AND status = 'open'`, [now.toISOString(), user?.id ?? null, id]));
     await event(id, `Acknowledged by ${user?.name ?? 'someone'} via ${via}`, now);
     await notify.channel({
-      text: `:eyes: Incident #${id} *${inc.title}* acknowledged by ${mention(user)}.`, incidentId: id,
+      text: `:eyes: Incident #${id} *${inc.title}* acknowledged by ${mention(user)}.${await onCallTags(inc, user)}`, incidentId: id,
     });
     return { incident: await get(id), changed: true };
   }
@@ -113,7 +120,7 @@ export function makeIncidents({ db, rotation, notify }) {
                 acked_at = COALESCE(acked_at, ?), acked_by = COALESCE(acked_by, ?) WHERE id = ?`, [now.toISOString(), user?.id ?? null, now.toISOString(), user?.id ?? null, id]));
     await event(id, `Resolved by ${user?.name ?? 'someone'} via ${via}`, now);
     await notify.channel({
-      text: `:white_check_mark: Incident #${id} *${inc.title}* resolved by ${mention(user)}.`, incidentId: id,
+      text: `:white_check_mark: Incident #${id} *${inc.title}* resolved by ${mention(user)}.${await onCallTags(inc, user)}`, incidentId: id,
     });
     return { incident: await get(id), changed: true };
   }

@@ -290,3 +290,33 @@ test('existing databases get a role: admins stay admin, everyone else becomes an
   await reopened.close();
   fs.rmSync(dir, { recursive: true });
 });
+
+test('admin re-send of weekend-start messages reaches everyone on call again', async () => {
+  const { db, rotation, notify, sent, addUsers } = await setup();
+  await addUsers('Ana', 'Ben');
+  const incidents = makeIncidents({ db, rotation, notify });
+  const scheduler = makeScheduler({ db, shifts, rotation, notify, incidents });
+  await scheduler.runOnce(at('2026-11-20T23:00:00Z')); // weekend starts
+  sent.length = 0;
+  const people = await scheduler.resendWeekendStart(at('2026-11-21T12:00:00Z'));
+  assert.deepEqual(people.map((p) => p.name), ['Ana', 'Ben']);
+  assert.ok(sent.some((m) => m.to === 'UANA000000' && /on call now/.test(m.text)));
+  assert.ok(sent.some((m) => m.to === 'UBEN000000' && /on call now/.test(m.text)));
+  assert.equal(await scheduler.resendWeekendStart(at('2026-11-25T12:00:00Z')), null, 'nothing on a weekday');
+});
+
+test('channel messages tag whoever is on call', async () => {
+  const { db, rotation, notify, sent, addUsers } = await setup();
+  const [ana, ben, cal] = await addUsers('Ana', 'Ben', 'Cal');
+  config.slack.channel = 'CONCALL';
+  const incidents = makeIncidents({ db, rotation, notify });
+  const inc = await incidents.create({ title: 'Down' }, at('2026-11-21T15:00:00Z'));
+  assert.ok(sent.some((m) => m.to === 'CONCALL' && m.text.includes('<@UANA000000>') && m.text.includes('<@UBEN000000>')));
+  sent.length = 0;
+  await incidents.acknowledge(inc.id, cal, 'web');
+  const ack = sent.find((m) => m.to === 'CONCALL');
+  assert.match(ack.text, /acknowledged by <@UCAL000000>.*cc <@UANA000000> <@UBEN000000> \(on call\)/);
+  sent.length = 0;
+  await incidents.resolve(inc.id, ana, 'web');
+  assert.match(sent.find((m) => m.to === 'CONCALL').text, /resolved by <@UANA000000>\. cc <@UBEN000000> \(on call\)/);
+});

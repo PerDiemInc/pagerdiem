@@ -387,6 +387,11 @@ export function teamPage({ user, members, inactive, flash }) {
 export function settingsPage({ user, status, notifications, flash }) {
   const yes = (ok, label) => `<span class="pill ${ok ? 'sent' : 'dry-run'}">${ok ? 'connected' : label}</span>`;
   const url = (p) => `<code>${esc(config.publicUrl + p)}</code>`;
+  const resend = user.is_admin
+    ? `<div class="card"><h2>Weekend messages</h2>
+        <p class="small muted">Re-send this weekend's "you're on call now" message to everyone on call, and post it in the on-call channel again. Useful if Slack or WhatsApp was connected after the weekend started.</p>
+        <form method="post" action="/admin/resend-weekend-start" class="inline"><button class="sm">Re-send this weekend's on-call messages</button></form></div>`
+    : '';
   const body = `<h1>Settings</h1>
   <div class="grid">
     <div class="card"><h2>Slack ${yes(status.slack, 'dry-run')}</h2>
@@ -403,6 +408,7 @@ export function settingsPage({ user, status, notifications, flash }) {
       <p class="small"><code>curl -X POST ${esc(config.publicUrl)}/api/incidents -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" -d '{"title":"API 5xx spike","details":"..."}'</code></p>
       <p class="small muted">Set API_TOKEN to enable.</p></div>
   </div>
+  ${resend}
   <div class="card"><h2>Recent messages</h2>${notificationTable(notifications)}</div>`;
   return layout({ title: 'Settings', user, body, flash, active: 'settings' });
 }
