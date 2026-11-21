@@ -98,6 +98,11 @@ test('non-technical people can view the calendar and audit log and trigger an al
   const teamHtml = await (await get('/team', ana)).text();
   assert.match(teamHtml, /<tr class="role-admin">/);
   assert.match(teamHtml, /<tr class="role-engineer">/);
+  const onlyAdmins = await (await get('/team?role=admin', ana)).text();
+  assert.match(onlyAdmins, /<tr class="role-admin">/);
+  assert.doesNotMatch(onlyAdmins, /<tr class="role-engineer">/);
+  assert.match(onlyAdmins, /aria-current="true"[^>]*>Admin/);
+  assert.match(await (await get('/team?role=bogus', ana)).text(), /<tr class="role-engineer">/, 'unknown role shows everyone');
   await app.db.run("UPDATE users SET role = 'non_technical' WHERE id = ?", [benId]);
 });
 
