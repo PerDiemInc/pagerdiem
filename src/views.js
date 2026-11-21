@@ -56,6 +56,9 @@ form.inline{display:inline-flex;gap:6px;align-items:center;margin:0}form.inline 
 code{background:var(--chip);padding:1px 6px;border-radius:5px;font-size:13px;word-break:break-all}
 .timeline{list-style:none;padding:0;margin:0}.timeline li{padding:8px 0;border-bottom:1px solid var(--line)}
 .now{outline:2px solid var(--accent);outline-offset:-2px}
+nav.chips{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
+.chip{text-decoration:none;padding:5px 12px;border-radius:99px;border:1px solid var(--line);background:var(--card);font-size:14px;font-weight:600}
+.chip.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}.chip.on .muted{color:inherit;opacity:.8}
 tr.role-admin>td{background:var(--role-admin-bg)}tr.role-engineer>td{background:var(--role-engineer-bg)}tr.role-non_technical>td{background:var(--role-non-technical-bg)}
 @media (max-width:640px){.hide-sm{display:none}}
 .cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-top:1px solid var(--line);border-left:1px solid var(--line)}
@@ -357,9 +360,14 @@ function notificationTable(rows) {
     <td><span class="pill ${esc(n.status)}">${esc(n.status)}</span><div class="small muted">${esc(fmt(n.at))}</div></td></tr>`).join('')}</table></div>`;
 }
 
-export function teamPage({ user, members, inactive, flash }) {
+export function teamPage({ user, members, inactive, role = '', flash }) {
   const admin = isAdmin(user);
-  const rows = members.map((m, i) => `<tr class="role-${esc(m.role)}">
+  const counts = Object.fromEntries(ROLES.map((r) => [r, members.filter((m) => m.role === r).length]));
+  const chip = (value, label, count) =>
+    `<a class="chip ${role === value ? 'on' : ''}" href="${value ? `/team?role=${value}` : '/team'}"${role === value ? ' aria-current="true"' : ''}>${esc(label)} <span class="muted">${count}</span></a>`;
+  const filter = `<nav class="chips" aria-label="Filter by role">${chip('', 'All', members.length)}${
+    ROLES.map((r) => chip(r, ROLE_LABELS[r], counts[r])).join('')}</nav>`;
+  const rows = members.map((m, i) => (role && m.role !== role ? '' : `<tr class="role-${esc(m.role)}">
     <td>${i + 1}</td>
     <td>${personCell(m, ` <span class="pill">${esc(ROLE_LABELS[m.role] || m.role)}</span>`)}<div class="small muted">${esc(m.email)}</div></td>
     <td class="small hide-sm">${m.slack_user_id ? `<code>${esc(m.slack_user_id)}</code>` : '<span class="pill failed">not linked</span>'}</td>
@@ -369,15 +377,17 @@ export function teamPage({ user, members, inactive, flash }) {
       <form method="post" action="/team/${m.id}/move" class="inline"><input type="hidden" name="dir" value="1"><button class="sm" ${i === members.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button></form>
       <form method="post" action="/team/${m.id}/active" class="inline"><input type="hidden" name="active" value="0"><button class="sm">Remove</button></form>
       <form method="post" action="/team/${m.id}/role" class="inline"><select name="role" aria-label="Role for ${esc(m.name)}">${ROLES.map((r) => `<option value="${r}" ${m.role === r ? 'selected' : ''}>${esc(ROLE_LABELS[r])}</option>`).join('')}</select><button class="sm">Set role</button></form>
-    </div>` : ''}</td></tr>`).join('');
-  const removed = inactive.length ? `<div class="card"><h2>Removed from rotation</h2><table>${inactive.map((m) => `<tr>
+    </div>` : ''}</td></tr>`)).join('');
+  const shownInactive = inactive.filter((m) => !role || m.role === role);
+  const removed = shownInactive.length ? `<div class="card"><h2>Removed from rotation</h2><table>${shownInactive.map((m) => `<tr>
     <td>${esc(m.name)} <span class="small muted">${esc(m.email)}</span></td>
     <td style="text-align:right">${admin ? `<form method="post" action="/team/${m.id}/active" class="inline"><input type="hidden" name="active" value="1"><button class="sm">Add back</button></form>` : ''}</td>
   </tr>`).join('')}</table></div>` : '';
   const body = `<h1>Team</h1>
+  ${filter}
   <div class="card scroll"><h2>Rotation order</h2>
     <p class="small muted">Each weekend goes to the next engineer in this list. Admins are optional, and non-technical people (C-level, support, product) are never on call: they can view the calendar and audit log and trigger an alert. ${admin ? 'You can reorder or remove people.' : 'Ask an admin to reorder.'}</p>
-    <table><thead><tr><th>#</th><th>Name</th><th class="hide-sm">Slack</th><th class="hide-sm">Phone</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <table><thead><tr><th>#</th><th>Name</th><th class="hide-sm">Slack</th><th class="hide-sm">Phone</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="muted">Nobody has this role.</td></tr>'}</tbody></table></div>
   ${removed}
   <div class="card" style="max-width:520px"><h2>Your contact details</h2>
     <form method="post" action="/profile">

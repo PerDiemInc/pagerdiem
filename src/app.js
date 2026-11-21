@@ -433,8 +433,9 @@ export function createApp({ db, notifierOverrides } = {}) {
   router.get('/team', async (ctx) => {
     if (!requireUser(ctx)) return;
     requireResponder(ctx);
+    const role = isRole(ctx.query.get('role')) ? ctx.query.get('role') : '';
     ctx.r.html(views.teamPage({
-      user: ctx.user, members: (await rotation.activeMembers()),
+      user: ctx.user, role, members: (await rotation.activeMembers()),
       inactive: (await db.all('SELECT * FROM users WHERE active = 0 ORDER BY name')),
       flash: takeFlash(ctx),
     }));
