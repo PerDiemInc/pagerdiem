@@ -16,6 +16,8 @@ Paging tools are built for large incident-response orgs and priced per seat. Man
 need: *who's on call this weekend, and how do we reach them when something breaks?* PagerDiem does
 exactly that, and you can run it for free.
 
+It runs on-prem or in your own cloud account. There is no subscription and no per-seat price, so it costs nothing at any team size, including over 100 people. You only pay for the server it runs on.
+
 ## Features
 
 | | |

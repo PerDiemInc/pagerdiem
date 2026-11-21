@@ -4,112 +4,278 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PagerDiem: self-hosted weekend on-call</title>
-<meta name="description" content="Open-source weekend on-call for small engineering teams: fair rotation, Slack paging with escalation, shared calendar, Google Workspace sign-in.">
+<meta name="description" content="On-prem weekend on-call for engineering teams of any size: no subscription, no per-seat cost. Fair rotation, Slack paging with escalation, shared calendar, Google Workspace sign-in. Open source, MIT.">
+<meta name="theme-color" content="#0b0818">
+<meta name="color-scheme" content="dark">
 <link rel="canonical" href="https://perdieminc.github.io/pagerdiem/">
-<meta property="og:title" content="PagerDiem: self-hosted weekend on-call">
-<meta property="og:description" content="Fair weekend rotation, Slack paging with escalation, calendar and audit log. One Node.js process. MIT licensed.">
+<meta property="og:title" content="PagerDiem: on-prem weekend on-call, no subscription">
+<meta property="og:description" content="Fair weekend rotation, Slack paging with escalation, calendar and audit log. No subscription and no cost when your team is over 100 people. MIT licensed.">
 <meta property="og:image" content="https://perdieminc.github.io/pagerdiem/images/dashboard.jpg">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📟</text></svg>">
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--text:#16181d;--muted:#5f6673;--line:#e3e6eb;--accent:#e8492b;--accent-ink:#fff;--code:#0f1115;--code-ink:#e8eaee}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a20;--text:#e8eaee;--muted:#9aa1ad;--line:#2a2f38;--accent:#ff6a4d;--code:#0a0c10}}
+:root{
+  --void:#0b0818;--deep:#120d27;--panel:#1a1336;--edge:#33286a;
+  --ink:#f1edff;--muted:#a79fd0;
+  --magenta:#ff2e93;--cyan:#19e3ff;--amber:#ffb800;
+  --lcd:#0a1a14;--lcd-ink:#7dffb2;
+  --display:"Bahnschrift","DIN Alternate","Avenir Next Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,monospace;
+}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--void);color:var(--ink);font:17px/1.6 var(--body);-webkit-font-smoothing:antialiased}
 a{color:inherit}
-.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
-header{border-bottom:1px solid var(--line);background:var(--card)}
-header .wrap{display:flex;align-items:center;gap:16px;height:60px}
-.brand{display:flex;align-items:center;gap:9px;font-weight:700;font-size:18px;text-decoration:none}
-.brand i{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-style:normal;font-size:15px}
-header nav{margin-left:auto;display:flex;gap:20px;font-size:15px}
-header nav a{text-decoration:none;color:var(--muted)}header nav a:hover{color:var(--text)}
-.hero{padding:72px 0 40px;text-align:center}
-.hero h1{font-size:clamp(32px,5vw,52px);line-height:1.1;margin:0 0 18px;letter-spacing:-.02em}
-.hero p{font-size:clamp(17px,2.2vw,20px);color:var(--muted);max-width:680px;margin:0 auto 28px}
-.btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
-.btn{display:inline-block;padding:12px 20px;border-radius:10px;font-weight:600;text-decoration:none;border:1px solid var(--line);background:var(--card)}
-.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
-.shot{margin:40px auto 0;border-radius:14px;overflow:hidden;border:1px solid var(--line);box-shadow:0 20px 60px rgba(0,0,0,.12);max-width:1000px}
-.shot img{display:block;width:100%;height:auto}
-section{padding:56px 0}
-h2{font-size:28px;margin:0 0 8px;letter-spacing:-.01em}
-.lead{color:var(--muted);margin:0 0 28px}
-.grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
-.card h3{margin:0 0 6px;font-size:17px}
-.card p{margin:0;color:var(--muted);font-size:15px}
-.pair{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
-.pair figure{margin:0}.pair img{width:100%;border-radius:12px;border:1px solid var(--line);display:block}
-.pair figcaption{color:var(--muted);font-size:14px;margin-top:8px;text-align:center}
-pre{background:var(--code);color:var(--code-ink);padding:18px 20px;border-radius:12px;overflow-x:auto;font-size:14px;line-height:1.55}
-.deploy .card a{font-weight:600}
-.tag{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:99px;background:var(--bg);border:1px solid var(--line);color:var(--muted);margin-bottom:10px}
-@media (max-width:560px){header nav a:not(:last-child){display:none}}
-footer{border-top:1px solid var(--line);padding:28px 0 48px;color:var(--muted);font-size:14px}
-footer .wrap{display:flex;gap:16px;flex-wrap:wrap;justify-content:space-between}
+:focus-visible{outline:3px solid var(--cyan);outline-offset:3px;border-radius:4px}
+.wrap{max-width:1120px;margin:0 auto;padding:0 22px}
+
+header{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--void) 82%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--edge)}
+header .wrap{display:flex;align-items:center;gap:18px;height:62px}
+.brand{display:flex;align-items:center;gap:10px;font:800 21px var(--display);letter-spacing:.01em;text-decoration:none}
+.brand i{width:30px;height:22px;border-radius:5px;background:var(--magenta);position:relative;box-shadow:0 0 14px color-mix(in srgb,var(--magenta) 70%,transparent)}
+.brand i::after{content:"";position:absolute;left:5px;top:5px;width:20px;height:7px;border-radius:2px;background:var(--lcd);box-shadow:inset 0 0 0 1px rgba(0,0,0,.4)}
+header nav{margin-left:auto;display:flex;gap:22px}
+header nav a{text-decoration:none;color:var(--muted);font-weight:600}
+header nav a:hover{color:var(--ink)}
+
+.hero{position:relative;overflow:hidden;padding:64px 0 72px}
+.hero::before{content:"";position:absolute;inset:auto -10% -2px -10%;height:46%;
+  background:
+    linear-gradient(to right,color-mix(in srgb,var(--cyan) 35%,transparent) 1px,transparent 1px) 0 0/64px 100%,
+    linear-gradient(to bottom,color-mix(in srgb,var(--magenta) 40%,transparent) 1px,transparent 1px) 0 0/100% 38px;
+  transform:perspective(420px) rotateX(58deg);transform-origin:50% 100%;
+  -webkit-mask-image:linear-gradient(to top,#000,transparent 92%);mask-image:linear-gradient(to top,#000,transparent 92%);opacity:.55}
+.hero::after{content:"";position:absolute;width:560px;height:560px;right:-120px;top:-160px;border-radius:50%;
+  background:radial-gradient(closest-side,color-mix(in srgb,var(--magenta) 32%,transparent),transparent);pointer-events:none}
+.hero .wrap{position:relative;z-index:1;display:grid;gap:48px;grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);align-items:center}
+h1{font:800 clamp(40px,6.4vw,76px)/.98 var(--display);letter-spacing:-.015em;margin:0 0 22px;
+  text-shadow:2px 0 var(--magenta),-2px 0 var(--cyan)}
+.hero p.lead{font-size:clamp(17px,2vw,20px);color:var(--muted);max-width:34em;margin:0 0 30px}
+.btns{display:flex;gap:14px;flex-wrap:wrap}
+.btn{display:inline-block;padding:13px 22px;font-weight:700;text-decoration:none;color:var(--ink);
+  border:1px solid var(--edge);background:var(--panel);
+  clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px)}
+.btn:hover{border-color:var(--cyan)}
+.btn.primary{background:var(--magenta);border-color:var(--magenta);color:#fff;box-shadow:0 0 24px color-mix(in srgb,var(--magenta) 55%,transparent)}
+
+/* The pager */
+.pager{justify-self:center;width:min(100%,380px);padding:20px 20px 24px;border-radius:30px;
+  background:linear-gradient(160deg,#2a2152,#150f30 60%);border:1px solid var(--edge);
+  box-shadow:0 0 0 2px #0b0818,0 30px 80px rgba(0,0,0,.45),0 0 60px color-mix(in srgb,var(--cyan) 22%,transparent);
+  transform:rotate(2.5deg)}
+.pager .top{display:flex;justify-content:space-between;align-items:center;color:#a79fd0;font:700 12px var(--mono);margin-bottom:12px}
+.pager .led{width:10px;height:10px;border-radius:50%;background:var(--magenta);box-shadow:0 0 10px var(--magenta)}
+.lcd{position:relative;min-height:232px;padding:16px 16px 18px;border-radius:12px;background:var(--lcd);
+  box-shadow:inset 0 0 0 2px #04100b,inset 0 0 40px rgba(0,0,0,.6);
+  font:600 13.5px/1.55 var(--mono);color:var(--lcd-ink);overflow:hidden}
+.lcd::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(to bottom,rgba(0,0,0,.22) 0 1px,transparent 1px 3px)}
+.lcd .row{white-space:pre-wrap;word-break:break-word;min-height:1.55em}
+.lcd .hot{color:var(--amber)}
+.lcd .ok{color:var(--cyan)}
+.lcd .cursor{display:inline-block;width:.6em;height:1.1em;background:var(--lcd-ink);vertical-align:-.18em;animation:blink 1s steps(2) infinite}
+.pager .keys{display:flex;gap:10px;margin-top:16px}
+.pager .keys span{flex:1;height:14px;border-radius:99px;background:#241b4a;box-shadow:inset 0 -2px 0 rgba(0,0,0,.4)}
+@keyframes blink{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.lcd .cursor{animation:none}html{scroll-behavior:auto}}
+
+section{padding:68px 0}
+h2{font:800 clamp(28px,4vw,44px)/1.05 var(--display);margin:0 0 12px;letter-spacing:-.01em}
+.sub{color:var(--muted);margin:0 0 34px;max-width:40em}
+
+.screen{border:1px solid var(--edge);background:var(--deep);padding:10px;
+  clip-path:polygon(18px 0,100% 0,100% calc(100% - 18px),calc(100% - 18px) 100%,0 100%,0 18px);
+  box-shadow:0 0 60px color-mix(in srgb,var(--cyan) 18%,transparent)}
+.screen img{display:block;width:100%;height:auto;border-radius:4px}
+.show{padding-top:8px}
+
+.bento{display:grid;gap:16px;grid-template-columns:repeat(6,minmax(0,1fr))}
+.tile{--c:var(--cyan);grid-column:span 2;padding:22px 22px 24px;background:var(--panel);border:1px solid var(--edge);
+  border-top:3px solid var(--c);clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,0 100%)}
+.tile:nth-child(3n+2){--c:var(--magenta)}
+.tile:nth-child(3n){--c:var(--amber)}
+.tile.wide{grid-column:span 3}
+.tile h3{font:800 22px/1.15 var(--display);margin:0 0 8px}
+.tile p{margin:0;color:var(--muted);font-size:16px}
+code{font:600 .88em var(--mono);background:color-mix(in srgb,var(--cyan) 14%,transparent);padding:1px 6px;border-radius:4px}
+
+.cost{background:linear-gradient(180deg,var(--deep),var(--void))}
+.cost .tile h3{font-size:clamp(26px,3.4vw,34px);line-height:1.05}
+.cost .tile{grid-column:span 2}
+.cost small{display:block;margin-top:22px;color:var(--muted);font-size:15px;max-width:48em}
+
+.track{list-style:none;margin:0;padding:0;display:grid;gap:0;grid-template-columns:repeat(4,minmax(0,1fr));position:relative}
+.track::before{content:"";position:absolute;left:0;right:0;top:15px;height:3px;
+  background:linear-gradient(90deg,var(--cyan),var(--amber),var(--magenta));box-shadow:0 0 14px color-mix(in srgb,var(--magenta) 50%,transparent)}
+.track li{position:relative;padding:44px 18px 0 0}
+.track li::before{content:"";position:absolute;left:0;top:6px;width:21px;height:21px;border-radius:50%;background:var(--void);border:3px solid var(--c,var(--cyan));box-shadow:0 0 12px var(--c,var(--cyan))}
+.track li:nth-child(2){--c:var(--cyan)}.track li:nth-child(3){--c:var(--amber)}.track li:nth-child(4){--c:var(--magenta)}
+.track b{display:block;font:800 26px var(--display)}
+.track span{color:var(--muted);font-size:15.5px}
+.note{margin:26px 0 0;color:var(--muted);font-size:15.5px;max-width:46em}
+
+.pair{display:grid;gap:22px;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr))}
+.pair figure{margin:0}
+.pair figcaption{color:var(--muted);font-size:14.5px;margin-top:10px}
+
+.deploy-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))}
+.deploy-grid .tile{grid-column:auto}
+.price{display:inline-block;font:700 13px var(--mono);color:var(--lcd-ink);background:var(--lcd);padding:3px 10px;border-radius:99px;margin-bottom:12px}
+.tile a.go{display:inline-block;margin-top:14px;font-weight:700;text-decoration-thickness:2px;text-underline-offset:4px;text-decoration-color:var(--magenta)}
+.term{margin:30px 0 0;background:var(--lcd);color:var(--lcd-ink);border:1px solid #14382a;border-radius:12px;padding:18px 20px;overflow-x:auto;font:600 14px/1.7 var(--mono)}
+.term .c{color:#4f9a78}
+h3.try{font:800 22px var(--display);margin:40px 0 0}
+
+footer{border-top:1px solid var(--edge);padding:30px 0 44px;color:var(--muted);font-size:15px}
+footer .wrap{display:flex;justify-content:space-between;gap:12px 24px;flex-wrap:wrap}
+
+@media (max-width:860px){
+  .hero .wrap{grid-template-columns:1fr}
+  .pager{transform:none;margin-top:8px}
+  .bento{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .tile,.tile.wide,.cost .tile{grid-column:span 1}
+  .tile.wide{grid-column:span 2}
+  .cost .tile{grid-column:span 2}
+  .track{grid-template-columns:1fr}
+  .track::before{left:10px;right:auto;top:0;bottom:0;width:3px;height:auto;background:linear-gradient(var(--cyan),var(--amber),var(--magenta))}
+  .track li{padding:0 0 28px 44px}
+  .track li::before{left:1px;top:3px}
+}
+@media (max-width:560px){.bento{grid-template-columns:1fr}.tile.wide,.cost .tile{grid-column:auto}header .wrap{height:auto;flex-wrap:wrap;padding-top:10px;padding-bottom:10px;gap:6px 18px}header nav{margin-left:0;width:100%;gap:18px;font-size:15px}}
 </style>
 </head>
 <body>
 <header><div class="wrap">
-  <a class="brand" href="#"><i>P</i>PagerDiem</a>
-  <nav><a href="#features">Features</a><a href="#deploy">Deploy</a><a href="https://github.com/PerDiemInc/pagerdiem">GitHub</a></nav>
+  <a class="brand" href="#"><i aria-hidden="true"></i>PagerDiem</a>
+  <nav aria-label="Main"><a href="#cost">Cost</a><a href="#features">Features</a><a href="#deploy">Deploy</a><a href="https://github.com/PerDiemInc/pagerdiem">GitHub</a></nav>
 </div></header>
 
 <main>
-<div class="wrap hero">
-  <h1>Weekend on-call,<br>without the enterprise bill.</h1>
-  <p>A fair rotation, Slack paging with escalation, a shared calendar and sign-in locked to your Google Workspace.
-     One Node.js process. Self-hosted. MIT licensed.</p>
-  <div class="btns">
-    <a class="btn primary" href="https://github.com/PerDiemInc/pagerdiem">View on GitHub</a>
-    <a class="btn" href="#deploy">Deploy it</a>
+<div class="hero"><div class="wrap">
+  <div>
+    <h1>Weekend on-call,<br>without the enterprise bill.</h1>
+    <p class="lead">On-prem on-call with no subscription: a fair rotation, Slack paging with escalation, a shared calendar and sign-in locked to your Google Workspace.
+       One Node.js process, MIT licensed, and no cost when your team is over 100 people.</p>
+    <div class="btns">
+      <a class="btn primary" href="https://github.com/PerDiemInc/pagerdiem">View on GitHub</a>
+      <a class="btn" href="#deploy">Deploy it</a>
+    </div>
   </div>
-  <div class="shot"><img src="images/dashboard.jpg" alt="PagerDiem dashboard: who is on call now, open incidents and the weekend rotation" width="1284" height="722"></div>
-</div>
+  <div class="pager" role="img" aria-label="A pager display: incident 42, checkout failing, pages Ana and Ben, re-pages after 5 minutes, then Ben acknowledges and paging stops.">
+    <div class="top"><span>PAGERDIEM</span><span class="led"></span></div>
+    <div class="lcd" id="lcd" aria-hidden="true"></div>
+    <div class="keys" aria-hidden="true"><span></span><span></span><span></span></div>
+  </div>
+</div></div>
+
+<section class="show"><div class="wrap">
+  <div class="screen"><img src="images/dashboard.jpg" alt="PagerDiem dashboard: who is on call now, open incidents and the weekend rotation" width="1284" height="722"></div>
+</div></section>
+
+<section id="cost" class="cost"><div class="wrap">
+  <h2>Pay for the server, not the seats</h2>
+  <p class="sub">Most paging tools bill per person, per month. PagerDiem is software you run yourself.</p>
+  <div class="bento">
+    <div class="tile"><h3>On-prem</h3><p>Run it on your own servers or in your own cloud account. One Docker image and one Postgres database, or a SQLite file to try it. Your incident data never leaves your network.</p></div>
+    <div class="tile"><h3>No subscription</h3><p>MIT licensed. No plan to pick, no trial that ends, no sales call, nothing to renew.</p></div>
+    <div class="tile"><h3>No cost past 100 people</h3><p>There are no seats to count. Ten engineers or a thousand, PagerDiem itself costs nothing.</p></div>
+  </div>
+  <small>You only pay for the machine it runs on: free tiers to start, or about $35–45 a month on AWS.</small>
+</div></section>
 
 <section id="features"><div class="wrap">
   <h2>What it does</h2>
-  <p class="lead">The parts of on-call a small team actually uses.</p>
-  <div class="grid">
-    <div class="card"><h3>Fair weekend rotation</h3><p>Two people per weekend, taking turns so everyone gets the same share. Admins are optional.</p></div>
-    <div class="card"><h3>Self-service</h3><p>Add yourself to any weekend or remove yourself. Weekends below target are flagged “needs cover”.</p></div>
-    <div class="card"><h3>Swap with undo</h3><p>Take someone's spot from the calendar. Ten seconds to undo before anyone is notified.</p></div>
-    <div class="card"><h3>Slack paging</h3><p>Page from the web, <code>/page</code> in Slack or the API. DMs with Acknowledge and Resolve buttons.</p></div>
-    <div class="card"><h3>Escalation</h3><p>Re-page every 5 minutes, page the backup at 15, <code>@channel</code> at 30.</p></div>
-    <div class="card"><h3>Calendar &amp; audit log</h3><p>Month view, a Google Calendar feed, and a public log of every add, remove and swap.</p></div>
-    <div class="card"><h3>Your team only</h3><p>Google sign-in restricted to your Workspace domain. Slack requests limited to your workspace.</p></div>
-    <div class="card"><h3>Roles</h3><p>Engineers go on call. Non-technical teammates can watch and raise an alert, never paged.</p></div>
+  <p class="sub">The parts of on-call a team actually uses.</p>
+  <div class="bento">
+    <div class="tile wide"><h3>Fair rotation, your days</h3><p>People take turns so everyone gets the same share. Two on the weekend by default; admins choose the days and how many people each needs.</p></div>
+    <div class="tile wide"><h3>Slack paging</h3><p>Page from the web, <code>/page</code> in Slack or the API. On-call people get a DM with Acknowledge and Resolve buttons.</p></div>
+    <div class="tile"><h3>Self-service</h3><p>Add yourself to any weekend or remove yourself. Weekends below target are flagged “needs cover”.</p></div>
+    <div class="tile"><h3>Swap with undo</h3><p>Take someone's spot from the calendar. Ten seconds to undo before anyone is notified.</p></div>
+    <div class="tile"><h3>Escalation</h3><p>Re-page every 5 minutes, page the backup at 15, <code>@channel</code> at 30, and keep going until someone acknowledges.</p></div>
+    <div class="tile"><h3>Calendar and audit log</h3><p>Month view, a Google Calendar feed, and a public log of every add, remove and swap.</p></div>
+    <div class="tile"><h3>Your team only</h3><p>Google sign-in restricted to your Workspace domain. Slack requests limited to your workspace.</p></div>
+    <div class="tile"><h3>Roles</h3><p>Engineers go on call. Non-technical teammates can watch and raise an alert, and are never paged.</p></div>
   </div>
+</div></section>
+
+<section id="escalation"><div class="wrap">
+  <h2>When nobody answers</h2>
+  <p class="sub">An incident keeps getting louder until a person takes it.</p>
+  <ol class="track">
+    <li><b>0 min</b><span>Everyone on call gets a DM, and the channel is told.</span></li>
+    <li><b>Every 5 min</b><span>Re-page the people on call until someone acknowledges.</span></li>
+    <li><b>15 min</b><span>Page the backup: the first person on the next weekend.</span></li>
+    <li><b>30 min</b><span><code>@channel</code>, then keep paging everyone every 5 minutes.</span></li>
+  </ol>
+  <p class="note">Automatic paging stops after 24 hours. A weekend with nobody on call pages the admins, and weekday alerts go to the channel with a reminder every 30 minutes.</p>
 </div></section>
 
 <section><div class="wrap">
+  <h2>See it working</h2>
+  <p class="sub">Real screens from a running instance.</p>
   <div class="pair">
-    <figure><img src="images/calendar.jpg" alt="Calendar showing two people on call each weekend" loading="lazy"><figcaption>Calendar: two people per weekend, colour-coded</figcaption></figure>
-    <figure><img src="images/audit-log.jpg" alt="Audit log of adds, removes and swaps" loading="lazy"><figcaption>Audit log: every change, grouped by day</figcaption></figure>
+    <figure><div class="screen"><img src="images/calendar.jpg" alt="Calendar showing two people on call each weekend" loading="lazy" width="1284" height="722"></div><figcaption>Calendar: who is on call, colour-coded.</figcaption></figure>
+    <figure><div class="screen"><img src="images/audit-log.jpg" alt="Audit log of adds, removes and swaps" loading="lazy" width="1284" height="722"></div><figcaption>Audit log: every change, grouped by day.</figcaption></figure>
+    <figure><div class="screen"><img src="images/incident.jpg" alt="An incident with its timeline and the messages that were sent" loading="lazy" width="1284" height="722"></div><figcaption>Incident: the timeline and every message sent.</figcaption></figure>
   </div>
 </div></section>
 
-<section id="deploy" class="deploy"><div class="wrap">
+<section id="deploy"><div class="wrap">
   <h2>Deploy it</h2>
-  <p class="lead">Run exactly one instance; the scheduler lives inside the web process.</p>
-  <div class="grid">
-    <div class="card"><span class="tag">Free tiers</span><h3>Render + Neon + Slack</h3>
+  <p class="sub">Run exactly one instance; the scheduler lives inside the web process.</p>
+  <div class="deploy-grid">
+    <div class="tile"><span class="price">Free tiers</span><h3>Render + Neon + Slack</h3>
       <p>Docker web service on Render, Postgres on Neon, plus the Slack app and Google sign-in. About 30 minutes.</p>
-      <p style="margin-top:12px"><a href="https://github.com/PerDiemInc/pagerdiem/blob/main/docs/deploy-render-slack.md">Read the guide →</a></p></div>
-    <div class="card"><span class="tag">≈ $35–45 / month</span><h3>AWS: ECS Fargate + RDS</h3>
+      <a class="go" href="https://github.com/PerDiemInc/pagerdiem/blob/main/docs/deploy-render-slack.md">Read the Render guide</a></div>
+    <div class="tile"><span class="price">About $35–45 a month</span><h3>AWS: ECS Fargate + RDS</h3>
       <p>Always-on task behind an ALB, managed Postgres, secrets in Secrets Manager, logs in CloudWatch.</p>
-      <p style="margin-top:12px"><a href="https://github.com/PerDiemInc/pagerdiem/blob/main/docs/deploy-aws.md">Read the guide →</a></p></div>
+      <a class="go" href="https://github.com/PerDiemInc/pagerdiem/blob/main/docs/deploy-aws.md">Read the AWS guide</a></div>
   </div>
-  <h3 style="margin:36px 0 8px">Or try it locally in a minute</h3>
-<pre><code>git clone https://github.com/PerDiemInc/pagerdiem && cd pagerdiem
-cp .env.example .env
-npm install && npm start      # http://localhost:3000 (dry-run, no keys needed)</code></pre>
+  <h3 class="try">Or try it locally in a minute</h3>
+<pre class="term"><code><span class="c">$</span> git clone https://github.com/PerDiemInc/pagerdiem &amp;&amp; cd pagerdiem
+<span class="c">$</span> cp .env.example .env
+<span class="c">$</span> npm install &amp;&amp; npm start      <span class="c"># http://localhost:3000 (dry-run, no keys needed)</span></code></pre>
 </div></section>
 </main>
 
 <footer><div class="wrap">
   <span>PagerDiem is MIT licensed. Built at <a href="https://tryperdiem.com">Per Diem</a> for our own weekend rotation.</span>
-  <span><a href="https://github.com/PerDiemInc/pagerdiem">GitHub</a> · <a href="https://github.com/PerDiemInc/pagerdiem/blob/main/SECURITY.md">Security</a></span>
+  <span><a href="https://github.com/PerDiemInc/pagerdiem">GitHub</a> and <a href="https://github.com/PerDiemInc/pagerdiem/blob/main/SECURITY.md">Security</a></span>
 </div></footer>
+
+<script>
+(function () {
+  var lcd = document.getElementById('lcd');
+  var script = [
+    { t: 'INCIDENT #42', c: 'hot' },
+    { t: 'checkout failing' },
+    { t: 'paging ana, ben (on call)' },
+    { t: '' },
+    { t: '+05:00 no ack, re-paging', c: 'hot' },
+    { t: '' },
+    { t: '+07:12 ack by ben', c: 'ok' },
+    { t: 'paging stopped' }
+  ];
+  var still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function row(cls) { var d = document.createElement('div'); d.className = 'row' + (cls ? ' ' + cls : ''); lcd.appendChild(d); return d; }
+  if (still) { script.forEach(function (l) { row(l.c).textContent = l.t; }); return; }
+  var cursor = document.createElement('span'); cursor.className = 'cursor';
+  function play() {
+    lcd.textContent = '';
+    var i = 0;
+    (function line() {
+      if (i >= script.length) { cursor.remove(); return setTimeout(play, 5200); }
+      var l = script[i++], el = row(l.c), n = 0;
+      el.appendChild(cursor);
+      (function type() {
+        if (n >= l.t.length) { return setTimeout(line, l.t ? 380 : 120); }
+        cursor.insertAdjacentText('beforebegin', l.t.charAt(n++));
+        setTimeout(type, 34);
+      })();
+    })();
+  }
+  play();
+})();
+</script>
 </body>
 </html>
