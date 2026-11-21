@@ -78,7 +78,7 @@ test('with Google on, password signup and login are disabled', async () => {
   assert.doesNotMatch(page, /type="password"/);
 });
 
-test('Google round trip: new teammate adds Slack + WhatsApp; duplicates are refused', async (t) => {
+test('Google round trip: new teammate adds Slack + phone; duplicates are refused', async (t) => {
   async function signIn(email, name) {
     const start = await fetch(`${base}/auth/google`, { redirect: 'manual' });
     const state = new URL(start.headers.get('location')).searchParams.get('state');
@@ -113,7 +113,7 @@ test('Google round trip: new teammate adds Slack + WhatsApp; duplicates are refu
   assert.match(await res.text(), /Slack account already belongs to Ana Admin/);
   res = await welcome({ name: 'Ben', slack: 'U0BEN12345', whatsapp: '(415) 555-0100' });
   assert.equal(res.status, 400);
-  assert.match(await res.text(), /WhatsApp number already belongs to Ana Admin/);
+  assert.match(await res.text(), /phone number already belongs to Ana Admin/);
   res = await welcome({ name: 'Ben', slack: 'U0BEN12345', whatsapp: '+14155550101' });
   assert.equal(res.status, 303);
   assert.equal((await app.db.get("SELECT role FROM users WHERE email = 'ben@example.com'")).role, 'non_technical');

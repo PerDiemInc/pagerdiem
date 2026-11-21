@@ -123,7 +123,7 @@ const contactFields = (values = {}) => `
     <label for="slack">Your Slack</label>
     <input id="slack" name="slack" value="${esc(values.slack)}" placeholder="Slack email or member ID (U0123ABCD)">
     <div class="hint">Leave blank to use your work email. Or paste your member ID: Slack → your profile → ⋮ → Copy member ID. Each person needs their own.</div>
-    <label for="whatsapp">Your WhatsApp number</label>
+    <label for="whatsapp">Your phone number</label>
     <input id="whatsapp" name="whatsapp" type="tel" required value="${esc(values.whatsapp)}" placeholder="+1 415 555 0123" autocomplete="tel">
     <div class="hint">With country code. Pages arrive here when you're on call.</div>`;
 
@@ -139,7 +139,7 @@ export function authPage({ mode, values = {}, error, domains, google, notConfigu
   <p class="muted">Weekend on-call for ${esc(config.teamName)}.</p>
   ${error ? `<div class="flash error">${esc(error)}</div>` : ''}
   <p><a class="btn" href="/auth/google" style="display:flex;gap:10px;align-items:center;justify-content:center">${GOOGLE_ICON} Sign in with Google</a></p>
-  ${only ? `<p class="small muted">Only ${only} Google accounts can sign in. First time? Sign in and you'll be asked for your Slack and WhatsApp.</p>` : ''}
+  ${only ? `<p class="small muted">Only ${only} Google accounts can sign in. First time? Sign in and you'll be asked for your Slack account and phone number.</p>` : ''}
 </div>`
     : `<div class="auth card">
   <h1>${signup ? `Join the ${esc(config.teamName)} on-call rotation` : 'Log in'}</h1>
@@ -371,13 +371,13 @@ export function teamPage({ user, members, inactive, flash }) {
   const body = `<h1>Team</h1>
   <div class="card scroll"><h2>Rotation order</h2>
     <p class="small muted">Each weekend goes to the next engineer in this list. Admins are optional, and non-technical people (C-level, support, product) are never on call: they can view the calendar and audit log and trigger an alert. ${admin ? 'You can reorder or remove people.' : 'Ask an admin to reorder.'}</p>
-    <table><thead><tr><th>#</th><th>Name</th><th class="hide-sm">Slack</th><th class="hide-sm">WhatsApp</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <table><thead><tr><th>#</th><th>Name</th><th class="hide-sm">Slack</th><th class="hide-sm">Phone</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
   ${removed}
   <div class="card" style="max-width:520px"><h2>Your contact details</h2>
     <form method="post" action="/profile">
       <label for="name">Name</label><input id="name" name="name" required value="${esc(user.name)}">
       <label for="slack">Slack</label><input id="slack" name="slack" value="${esc(user.slack_user_id || '')}" placeholder="Slack email or member ID">
-      <label for="whatsapp">WhatsApp number</label><input id="whatsapp" name="whatsapp" type="tel" required value="${esc(user.whatsapp)}">
+      <label for="whatsapp">Phone number</label><input id="whatsapp" name="whatsapp" type="tel" required value="${esc(user.whatsapp)}">
       <p><button class="primary">Save</button>
       <button formaction="/profile/test" class="sm" style="margin-left:6px">Send me a test message</button></p>
     </form></div>`;
@@ -389,7 +389,7 @@ export function settingsPage({ user, status, notifications, flash }) {
   const url = (p) => `<code>${esc(config.publicUrl + p)}</code>`;
   const resend = user.is_admin
     ? `<div class="card"><h2>Weekend messages</h2>
-        <p class="small muted">Re-send this weekend's "you're on call now" message to everyone on call, and post it in the on-call channel again. Useful if Slack or WhatsApp was connected after the weekend started.</p>
+        <p class="small muted">Re-send this weekend's "you're on call now" message to everyone on call, and post it in the on-call channel again. Useful if Slack was connected after the weekend started.</p>
         <form method="post" action="/admin/resend-weekend-start" class="inline"><button class="sm">Re-send this weekend's on-call messages</button></form></div>`
     : '';
   const body = `<h1>Settings</h1>
@@ -399,10 +399,6 @@ export function settingsPage({ user, status, notifications, flash }) {
       <p class="small">Slash commands (point both at the same URL): <code>/oncall</code>, <code>/page</code> → ${url('/slack/commands')}</p>
       <p class="small">Interactivity request URL (Acknowledge / Resolve buttons): ${url('/slack/interactions')}</p>
       <p class="small muted">Bot scopes: chat:write, users:read, users:read.email, im:write, commands.</p></div>
-    <div class="card"><h2>WhatsApp (Twilio) ${yes(status.whatsapp, 'dry-run')}</h2>
-      <p class="small">Sender: ${config.whatsapp.from ? `<code>${esc(config.whatsapp.from)}</code>` : '<span class="muted">not set</span>'}</p>
-      <p class="small">Incoming message webhook (lets people reply ACK / RESOLVE): ${url('/whatsapp/incoming')}</p>
-      <p class="small muted">WhatsApp only allows free-form messages within 24h of the person's last message to you. For pages outside that window, set approved templates in TWILIO_PAGE_TEMPLATE_SID / TWILIO_SHIFT_TEMPLATE_SID.</p></div>
     <div class="card"><h2>Alerts API ${yes(status.api, 'disabled')}</h2>
       <p class="small">Trigger a page from Sentry, Coralogix, CI or a script:</p>
       <p class="small"><code>curl -X POST ${esc(config.publicUrl)}/api/incidents -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" -d '{"title":"API 5xx spike","details":"..."}'</code></p>

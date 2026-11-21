@@ -1,7 +1,7 @@
 // Wires everything together and defines the HTTP routes.
 import http from 'node:http';
 import crypto from 'node:crypto';
-import { config, slackEnabled, whatsappEnabled, googleEnabled } from './config.js';
+import { config, slackEnabled, googleEnabled } from './config.js';
 import * as google from './google.js';
 import { makeShifts, formatLocal, formatRange, parseKey, tzParts } from './time.js';
 import * as calendar from './calendar.js';
@@ -10,7 +10,7 @@ import { makeNotifier } from './notify/index.js';
 import { makeIncidents } from './incidents.js';
 import { makeScheduler } from './scheduler.js';
 import { lookupUserIdByEmail, verifySlackSignature, mention } from './notify/slack.js';
-import { normalizePhone, verifyTwilioSignature } from './notify/whatsapp.js';
+import { normalizePhone } from './phone.js';
 import {
   hashPassword, verifyPassword, sessionCookie, clearSessionCookie, sessionUserId, parseCookies, safeEqual,
   signPayload, readPayload,
@@ -99,13 +99,13 @@ export function createApp({ db, notifierOverrides } = {}) {
 
   /**
    * Validate and add a team member. Each person must have their own Slack account and
-   * WhatsApp number. Returns { user } or { error }.
+   * phone number. Returns { user } or { error }.
    */
   async function createMember({ name, email, slack, whatsapp: rawPhone, passwordHash }) {
     name = String(name || '').trim().slice(0, 80);
     const whatsapp = normalizePhone(rawPhone);
     if (!name) return { error: 'Please enter your name.' };
-    if (!whatsapp) return { error: 'Please enter your WhatsApp number with country code, e.g. +1 415 555 0123.' };
+    if (!whatsapp) return { error: 'Please enter your phone number with country code, e.g. +1 415 555 0123.' };
     if (await userByEmail(email)) return { error: 'That email is already signed up — log in instead.' };
     const slackId = await resolveSlack(slack, email);
     if (!slackId) return { error: "We couldn't find you on Slack. Enter your Slack member ID (Slack profile → ⋮ → Copy member ID)." };
@@ -127,7 +127,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     const bySlack = await userBySlack(slackId);
     if (bySlack && bySlack.id !== exceptId) return `That Slack account already belongs to ${bySlack.name}. Use your own Slack account.`;
     const byPhone = await userByPhone(whatsapp);
-    if (byPhone && byPhone.id !== exceptId) return `That WhatsApp number already belongs to ${byPhone.name}. Use your own number.`;
+    if (byPhone && byPhone.id !== exceptId) return `That phone number already belongs to ${byPhone.name}. Use your own number.`;
     return null;
   }
 
@@ -135,7 +135,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     setFlash(r, 'ok', isFirst
       ? "Welcome! You're the first member, so you're an admin. Invite the rest of the team to sign up."
       : isResponder(user)
-        ? "You're in the weekend rotation. Use “Send me a test message” on the Team page to check Slack and WhatsApp."
+        ? "You're in the weekend rotation. Use “Send me a test message” on the Team page to check Slack."
         : "You're in. You can view the calendar and audit log and trigger an alert. Ask an admin if you should be on call.");
   }
 
@@ -224,7 +224,7 @@ export function createApp({ db, notifierOverrides } = {}) {
       ctx.r.cookie(sessionCookie(existing.id));
       return ctx.r.redirect('/');
     }
-    // New teammate: ask for their Slack and WhatsApp before adding them to the rotation.
+    // New teammate: ask for their Slack and phone number before adding them to the rotation.
     ctx.r.cookie(tempCookie(PENDING_COOKIE, signPayload(identity, 1800), 1800));
     ctx.r.redirect('/welcome');
   });
@@ -390,7 +390,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     if (!requireUser(ctx)) return;
     const inc = await incidents.create({ title: ctx.body.title, details: ctx.body.details, source: 'web', createdBy: ctx.user.id });
     const who = (await rotation.userById(inc.assigned_user_id));
-    setFlash(ctx.r, 'ok', who ? `Paged ${who.name} on Slack and WhatsApp.` : 'Nobody is on call — alerted the team channel.');
+    setFlash(ctx.r, 'ok', who ? `Paged the on-call on Slack.` : 'Nobody is on call — alerted the team channel.');
     ctx.r.redirect(`/incidents/${inc.id}`);
   });
 
@@ -420,33 +420,6 @@ export function createApp({ db, notifierOverrides } = {}) {
     await incidents.resolve(Number(ctx.params.id), ctx.user, 'web');
     setFlash(ctx.r, 'ok', 'Resolved.');
     ctx.r.redirect(`/incidents/${ctx.params.id}`);
-  });
-
-  // One-tap acknowledge link from WhatsApp. GET only shows a button, because chat apps
-  // pre-fetch links for previews and a GET must never acknowledge by itself.
-  async function ackTarget(ctx) {
-    const inc = (await incidents.get(Number(ctx.params.id)));
-    const token = ctx.query.get('t') || ctx.body.t;
-    if (!inc || !token || !safeEqual(token, inc.ack_token)) throw new HttpError(404, 'This link is not valid.');
-    return inc;
-  }
-  router.get('/ack/:id', async (ctx) => {
-    const inc = await ackTarget(ctx);
-    const body = `<div class="auth card"><h1>#${inc.id} ${views.esc(inc.title)}</h1>
-      <p><span class="pill ${inc.status}">${inc.status}</span></p>
-      ${inc.status === 'open' ? `<form method="post" action="/ack/${inc.id}"><input type="hidden" name="t" value="${views.esc(inc.ack_token)}">
-        <button class="primary">Acknowledge</button></form>` : '<p>Nothing to do — someone already has it.</p>'}</div>`;
-    ctx.r.html(views.layout({ title: `Incident #${inc.id}`, user: ctx.user, body }));
-  });
-  router.post('/ack/:id', async (ctx) => {
-    const inc = await ackTarget(ctx);
-    const by = ctx.user || (await rotation.userById(inc.escalation_level === 1 ? inc.backup_user_id : inc.assigned_user_id));
-    const { changed } = await incidents.acknowledge(inc.id, by, 'link');
-    ctx.r.html(views.messagePage({
-      user: ctx.user, title: changed ? 'Acknowledged ✅' : 'Already acknowledged',
-      message: changed ? 'Paging has stopped. The team channel knows you have it.' : 'Someone is already on it.',
-      link: ctx.user ? { href: `/incidents/${inc.id}`, label: 'Open incident' } : null,
-    }));
   });
 
   // ---------- team ----------
@@ -502,7 +475,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     const name = String(ctx.body.name || '').trim().slice(0, 80);
     const whatsapp = normalizePhone(ctx.body.whatsapp);
     if (!name || !whatsapp) {
-      setFlash(ctx.r, 'error', 'Name and a WhatsApp number with country code are required.');
+      setFlash(ctx.r, 'error', 'Name and a phone number with country code are required.');
       return ctx.r.redirect('/team');
     }
     const slackId = await resolveSlack(ctx.body.slack, ctx.user.email);
@@ -524,10 +497,8 @@ export function createApp({ db, notifierOverrides } = {}) {
     if (!requireUser(ctx)) return;
     const results = await notify.user(ctx.user, {
       text: ':white_check_mark: PagerDiem test — this is how on-call pages will reach you on Slack.',
-      whatsappText: '✅ PagerDiem test — this is how on-call pages will reach you on WhatsApp.',
     });
-    // results are [slack?, whatsapp?] in the order notify.user sends them.
-    const channels = [ctx.user.slack_user_id && 'Slack', ctx.user.whatsapp && 'WhatsApp'].filter(Boolean);
+    const channels = ['Slack'];
     const describe = (r, name) => (!r.ok ? `${name} failed` : r.dryRun ? `${name} not connected yet (logged only)` : `${name} sent`);
     const summary = results.map((r, i) => describe(r, channels[i])).join(' · ');
     setFlash(ctx.r, results.some((x) => !x.ok) ? 'error' : 'ok',
@@ -551,7 +522,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     requireResponder(ctx);
     ctx.r.html(views.settingsPage({
       user: ctx.user,
-      status: { slack: slackEnabled(), whatsapp: whatsappEnabled(), api: Boolean(config.apiToken) },
+      status: { slack: slackEnabled(), api: Boolean(config.apiToken) },
       notifications: (await db.all('SELECT * FROM notifications ORDER BY id DESC LIMIT 30')),
       flash: takeFlash(ctx),
     }));
@@ -641,39 +612,6 @@ export function createApp({ db, notifierOverrides } = {}) {
         });
       }
     })().catch((err) => console.error('slack interaction failed:', err));
-  });
-
-  // ---------- WhatsApp (Twilio) ----------
-  router.post('/whatsapp/incoming', async (ctx) => {
-    const signed = verifyTwilioSignature(`${config.publicUrl}/whatsapp/incoming`, ctx.body, ctx.req.headers['x-twilio-signature']);
-    if (!signed && (whatsappEnabled() || config.isProd)) throw new HttpError(403, 'Bad Twilio signature');
-    const phone = normalizePhone(String(ctx.body.From || '').replace(/^whatsapp:/, ''));
-    const user = (await userByPhone(phone));
-    const text = String(ctx.body.Body || '').trim();
-    const word = text.split(/\s+/)[0]?.toUpperCase();
-    const reply = (msg) => ctx.r.xml(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${views.esc(msg)}</Message></Response>`);
-
-    if (!user) return reply("This number isn't registered with PagerDiem. Sign up at " + config.publicUrl);
-    const respondersOnly = ['ACK', 'ACKNOWLEDGE', 'OK', 'ON IT', 'RESOLVE', 'RESOLVED', 'FIXED', 'DONE'];
-    if (respondersOnly.includes(word) && !isResponder(user)) return reply('Only engineers and admins can acknowledge or resolve incidents.');
-    if (['ACK', 'ACKNOWLEDGE', 'OK', 'ON IT'].includes(word)) {
-      const inc = (await incidents.latestOpenFor(user));
-      if (!inc) return reply('No open incidents. 👍');
-      await incidents.acknowledge(inc.id, user, 'whatsapp');
-      return reply(`✅ Acknowledged #${inc.id}: ${inc.title}. Reply RESOLVE when it's fixed.`);
-    }
-    if (['RESOLVE', 'RESOLVED', 'FIXED', 'DONE'].includes(word)) {
-      const inc = (await db.get(`SELECT * FROM incidents WHERE status != 'resolved'
-        ORDER BY CASE WHEN acked_by = ? THEN 1 ELSE 0 END DESC, CASE WHEN assigned_user_id = ? THEN 1 ELSE 0 END DESC, id DESC LIMIT 1`, [user.id, user.id]));
-      if (!inc) return reply('No open incidents. 👍');
-      await incidents.resolve(inc.id, user, 'whatsapp');
-      return reply(`✅ Resolved #${inc.id}: ${inc.title}. Thanks!`);
-    }
-    if (['WHO', 'ONCALL', 'STATUS'].includes(word)) {
-      const onCall = (await rotation.onCallNow());
-      return reply(onCall?.people.length ? `📟 ${onCall.people.map((p) => p.name).join(' and ')} on call until ${fmt(onCall.shift.end)}.` : '💤 Nobody is on call right now.');
-    }
-    return reply('PagerDiem commands: ACK, RESOLVE, WHO');
   });
 
   // ---------- alerts API ----------

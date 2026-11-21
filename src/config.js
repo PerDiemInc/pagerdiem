@@ -81,25 +81,9 @@ export const config = {
   },
 
   // Team WhatsApp group invite link, shown to signed-in teammates as a "Join" button.
-  // WhatsApp's business API can't post into groups, so pages still go to each person directly.
   whatsappGroupUrl: /^https:\/\/chat\.whatsapp\.com\/[A-Za-z0-9]+$/.test(env.WHATSAPP_GROUP_URL || '') ? env.WHATSAPP_GROUP_URL : '',
-
-  whatsapp: {
-    // Twilio WhatsApp. Leave blank to run in dry-run mode (messages are only logged).
-    accountSid: env.TWILIO_ACCOUNT_SID || '',
-    authToken: env.TWILIO_AUTH_TOKEN || '', // also used to verify incoming webhooks
-    // Optional: Twilio recommends an API key (SK...) + secret for REST calls.
-    apiKeySid: env.TWILIO_API_KEY_SID || '',
-    apiKeySecret: env.TWILIO_API_KEY_SECRET || '',
-    from: env.TWILIO_WHATSAPP_FROM || '', // e.g. whatsapp:+14155238886
-    // Optional approved template (Content SID) for messages sent outside the 24h window.
-    pageTemplateSid: env.TWILIO_PAGE_TEMPLATE_SID || '',
-    shiftTemplateSid: env.TWILIO_SHIFT_TEMPLATE_SID || '',
-  },
 };
 
 export const googleEnabled = () => Boolean(config.google.clientId && config.google.clientSecret);
 export const slackEnabled = () => Boolean(config.slack.botToken);
-export const whatsappEnabled = () =>
-  Boolean(config.whatsapp.accountSid && config.whatsapp.from &&
-    (config.whatsapp.authToken || (config.whatsapp.apiKeySid && config.whatsapp.apiKeySecret)));
+

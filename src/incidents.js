@@ -8,7 +8,6 @@ const MINUTE = 60_000;
 export function makeIncidents({ db, rotation, notify }) {
   const get = async (id) => (await db.get('SELECT * FROM incidents WHERE id = ?', [id])) ?? null;
   const userById = async (id) => (id ? rotation.userById(id) : null);
-  const ackUrl = (inc) => `${config.publicUrl}/ack/${inc.id}?t=${inc.ack_token}`;
   const incUrl = (inc) => `${config.publicUrl}/incidents/${inc.id}`;
 
   async function event(incidentId, message, at = new Date()) {
@@ -35,22 +34,11 @@ export function makeIncidents({ db, rotation, notify }) {
     ];
   }
 
-  /** Page one person about an incident on Slack + WhatsApp. */
+  /** Page one person about an incident by Slack DM. */
   async function page(inc, user, reason) {
     const details = inc.details ? `\n${inc.details}` : '';
     const text = `:rotating_light: *Incident #${inc.id}: ${inc.title}*${details}\n${reason}`;
-    const whatsappText =
-      `🚨 PagerDiem incident #${inc.id}: ${inc.title}${details}\n${reason}\n\n` +
-      `Reply ACK to acknowledge, or open ${ackUrl(inc)}`;
-    await notify.user(user, {
-      text,
-      blocks: pageBlocks(inc, text),
-      whatsappText,
-      whatsappTemplate: config.whatsapp.pageTemplateSid
-        ? { sid: config.whatsapp.pageTemplateSid, variables: { 1: String(inc.id), 2: inc.title, 3: ackUrl(inc) } }
-        : undefined,
-      incidentId: inc.id,
-    });
+    await notify.user(user, { text, blocks: pageBlocks(inc, text), incidentId: inc.id });
   }
 
   async function create({ title, details = '', source = 'web', createdBy = null }, now = new Date()) {
@@ -199,5 +187,5 @@ export function makeIncidents({ db, rotation, notify }) {
       ORDER BY CASE WHEN i.status = 'resolved' THEN 1 ELSE 0 END, i.id DESC LIMIT ?`, [limit]));
   }
 
-  return { create, acknowledge, resolve, tick, get, events, list, latestOpenFor, ackUrl };
+  return { create, acknowledge, resolve, tick, get, events, list, latestOpenFor };
 }

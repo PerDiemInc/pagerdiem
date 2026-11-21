@@ -34,4 +34,4 @@ services:
         value: FRI 18:00
       - key: SHIFT_END
         value: MON 09:00
-      # Slack / Twilio keys: add them later under Environment in the Render dashboard.
+      # Slack keys: add them later under Environment in the Render dashboard.

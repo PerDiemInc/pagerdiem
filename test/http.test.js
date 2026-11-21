@@ -142,26 +142,6 @@ test('alerts API needs the bearer token and creates an incident', async () => {
   assert.equal((await app.incidents.get(json.id)).title, 'API 5xx spike');
 });
 
-test('WhatsApp ACK acknowledges the latest open incident (dry-run, unsigned allowed locally)', async () => {
-  const inc = await app.incidents.create({ title: 'Orders stuck' });
-  const res = await post('/whatsapp/incoming', form({ From: 'whatsapp:+14155550100', Body: 'ack' }));
-  assert.equal(res.status, 200);
-  assert.match(await res.text(), /Acknowledged #/);
-  assert.equal((await app.incidents.get(inc.id)).status, 'acknowledged');
-});
-
-test('ack link: GET only shows a button, POST with the token acknowledges', async () => {
-  const inc = await app.incidents.create({ title: 'Login broken' });
-  let res = await fetch(`${base}/ack/${inc.id}?t=wrong`);
-  assert.equal(res.status, 404);
-  res = await fetch(`${base}/ack/${inc.id}?t=${inc.ack_token}`);
-  assert.equal(res.status, 200);
-  assert.equal((await app.incidents.get(inc.id)).status, 'open', 'GET does not acknowledge');
-  res = await post(`/ack/${inc.id}`, form({ t: inc.ack_token }));
-  assert.equal(res.status, 200);
-  assert.equal((await app.incidents.get(inc.id)).status, 'acknowledged');
-});
-
 test('Slack requests from another workspace are rejected when SLACK_TEAM_ID is set', async () => {
   const { config } = await import('../src/config.js');
   config.slack.teamId = 'T0OURTEAM';

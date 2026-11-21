@@ -1,4 +1,4 @@
-import { config, slackEnabled, whatsappEnabled } from './config.js';
+import { config, slackEnabled } from './config.js';
 import { openDb } from './db.js';
 import { createApp } from './app.js';
 
@@ -12,7 +12,7 @@ app.scheduler.start();
 app.server.listen(config.port, () => {
   console.log(`PagerDiem running at ${config.publicUrl} (port ${config.port})`);
   console.log(`  Shifts: ${JSON.stringify(config.shiftStart)} -> ${JSON.stringify(config.shiftEnd)} in ${config.timezone}`);
-  console.log(`  Slack: ${slackEnabled() ? 'connected' : 'dry-run'} · WhatsApp: ${whatsappEnabled() ? 'connected' : 'dry-run'}`);
+  console.log(`  Slack: ${slackEnabled() ? 'connected' : 'dry-run'}`);
 });
 
 // Stay awake on free hosting: a request through the public URL counts as traffic.

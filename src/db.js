@@ -14,14 +14,14 @@ CREATE TABLE IF NOT EXISTS users (
   email           TEXT NOT NULL UNIQUE,     -- always stored lowercase
   password_hash   TEXT NOT NULL,
   slack_user_id   TEXT,
-  whatsapp        TEXT NOT NULL,            -- E.164, e.g. +14155550123
+  whatsapp        TEXT NOT NULL,            -- phone number, E.164 (column name kept for existing databases)
   is_admin        INTEGER NOT NULL DEFAULT 0,  -- legacy, kept in sync with role = 'admin' so a rollback still works
   role            TEXT NOT NULL DEFAULT 'engineer' CHECK (role IN ('admin','engineer','non_technical')),
   active          INTEGER NOT NULL DEFAULT 1,
   rotation_order  INTEGER NOT NULL,
   created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
--- Every person has their own Slack account and WhatsApp number.
+-- Every person has their own Slack account and phone number.
 CREATE UNIQUE INDEX IF NOT EXISTS users_slack_unique ON users(slack_user_id) WHERE slack_user_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS users_whatsapp_unique ON users(whatsapp);
 CREATE TABLE IF NOT EXISTS shifts (

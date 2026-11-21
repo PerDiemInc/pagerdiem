@@ -1,7 +1,7 @@
 {
   "name": "pagerdiem",
   "version": "0.1.0",
-  "description": "Self-hosted weekend on-call rotation and paging with Google sign-in, Slack and WhatsApp.",
+  "description": "Self-hosted weekend on-call rotation and paging with Google sign-in and Slack.",
   "type": "module",
   "private": true,
   "engines": {

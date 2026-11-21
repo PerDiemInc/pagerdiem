@@ -24,11 +24,6 @@ export function makeScheduler({ db, shifts, rotation, notify, incidents }) {
       await notify.user(person, {
         text: `:pager: Heads up — you're on call this weekend, ${when}.` +
           (others.length ? ` With ${names(others)}.` : '') + ` Can't make it? Remove yourself at ${config.publicUrl}/`,
-        whatsappText: `📟 PagerDiem: you're on call this weekend, ${when}.` +
-          (others.length ? ` With ${names(others)}.` : '') + ` Can't make it? ${config.publicUrl}/`,
-        whatsappTemplate: config.whatsapp.shiftTemplateSid
-          ? { sid: config.whatsapp.shiftTemplateSid, variables: { 1: fmt(next.start), 2: fmt(next.end) } }
-          : undefined,
       });
     }
     if (await claimOnce(db, `reminder-channel:${next.key}`)) {
@@ -53,11 +48,7 @@ export function makeScheduler({ db, shifts, rotation, notify, incidents }) {
   async function announceWeekendStart(current, entry) {
     for (const person of entry.people) {
       await notify.user(person, {
-        text: `:pager: You're on call now until ${fmt(current.end)}. Keep Slack and WhatsApp notifications on. Thank you!`,
-        whatsappText: `📟 PagerDiem: you're on call now until ${fmt(current.end)}. Keep notifications on. Thank you!`,
-        whatsappTemplate: config.whatsapp.shiftTemplateSid
-          ? { sid: config.whatsapp.shiftTemplateSid, variables: { 1: fmt(current.start), 2: fmt(current.end) } }
-          : undefined,
+        text: `:pager: You're on call now until ${fmt(current.end)}. Keep Slack notifications on. Thank you!`,
       });
     }
     await notify.channel({
@@ -113,7 +104,7 @@ export function makeScheduler({ db, shifts, rotation, notify, incidents }) {
 
   /**
    * Send this weekend's "you're on call now" messages again (admin action, e.g. after
-   * Slack or WhatsApp was connected mid-weekend). Returns the people messaged, or null
+   * Slack was connected mid-weekend). Returns the people messaged, or null
    * when no weekend is in progress.
    */
   async function resendWeekendStart(now = new Date()) {

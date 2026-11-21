@@ -1,14 +1,12 @@
-// Fan-out to Slack and WhatsApp. Every message is recorded in the notifications table.
+// Slack delivery. Every message is recorded in the notifications table.
 // When a channel isn't configured the message is logged as "dry-run" instead of sent,
 // so the whole app can be tried locally without any credentials.
-import { config, slackEnabled, whatsappEnabled } from '../config.js';
+import { config, slackEnabled } from '../config.js';
 import * as slack from './slack.js';
-import * as whatsapp from './whatsapp.js';
 
 export function makeNotifier(db, overrides = {}) {
   const send = {
     slack: overrides.slack ?? (slackEnabled() ? (to, text, blocks) => slack.postMessage(to, text, blocks) : null),
-    whatsapp: overrides.whatsapp ?? (whatsappEnabled() ? (to, text, tpl) => whatsapp.sendWhatsApp(to, text, tpl) : null),
   };
   const insert = (...values) => db.run(`INSERT INTO notifications (at, channel, recipient, body, status, error, incident_id)
                                         VALUES (?, ?, ?, ?, ?, ?, ?)`, values);
@@ -31,19 +29,11 @@ export function makeNotifier(db, overrides = {}) {
     }
   }
 
-  /** DM a person on Slack and WhatsApp. */
-  async function user(u, { text, blocks, whatsappText, whatsappTemplate, incidentId }) {
-    const jobs = [];
-    if (u.slack_user_id) {
-      jobs.push(deliver('slack', `${u.name} (${u.slack_user_id})`, text,
-        send.slack && (() => send.slack(u.slack_user_id, text, blocks)), incidentId));
-    }
-    if (u.whatsapp) {
-      const body = whatsappText ?? text;
-      jobs.push(deliver('whatsapp', `${u.name} (${u.whatsapp})`, body,
-        send.whatsapp && (() => send.whatsapp(u.whatsapp, body, whatsappTemplate)), incidentId));
-    }
-    return Promise.all(jobs);
+  /** DM a person on Slack. */
+  async function user(u, { text, blocks, incidentId }) {
+    if (!u.slack_user_id) return [];
+    return [await deliver('slack', `${u.name} (${u.slack_user_id})`, text,
+      send.slack && (() => send.slack(u.slack_user_id, text, blocks)), incidentId)];
   }
 
   /** Post to the team's on-call Slack channel. */

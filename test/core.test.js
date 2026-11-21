@@ -147,11 +147,10 @@ test('incident pages on-call, re-pages, escalates to backup, then the channel', 
   const incidents = makeIncidents({ db, rotation, notify });
   const t0 = at('2026-11-21T15:00:00Z'); // Saturday: Ana + Ben on call, Cal is backup
 
-  const anaPhone = await addUserPhone(db, 'Ana');
   const inc = await incidents.create({ title: 'Checkout down' }, t0);
   assert.equal((await rotation.userById(inc.assigned_user_id)).name, 'Ana');
   assert.equal((await rotation.userById(inc.backup_user_id)).name, 'Cal');
-  assert.ok(sent.some((m) => m.ch === 'whatsapp' && m.to === anaPhone && m.text.includes('Checkout down')));
+  assert.ok(!sent.some((m) => m.ch === 'whatsapp'), 'Slack only');
   assert.ok(sent.some((m) => m.ch === 'slack' && m.to === 'UANA000000'));
   assert.ok(sent.some((m) => m.ch === 'slack' && m.to === 'UBEN000000'), 'both on-call people are paged');
   assert.ok(sent.some((m) => m.to === 'CONCALL'));
