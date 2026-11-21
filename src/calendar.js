@@ -43,10 +43,11 @@ export async function monthGrid(deps, year, month) {
     for (let d = 0; d < 7; d++) {
       const date = addDays(gridStart, w * 7 + d);
       const key = dateKey(date);
-      const span = spans.find((s) => key >= s.startKey && key <= s.endKey) || null;
+      const items = spans.filter((s) => key >= s.startKey && key <= s.endKey)
+        .map((span) => ({ entry: span, isStart: span.startKey === key, isEnd: span.endKey === key }));
       days.push({
-        key, day: date.day, inMonth: date.month === month, today: key === todayKey,
-        entry: span, isStart: span?.startKey === key, isEnd: span?.endKey === key,
+        key, day: date.day, inMonth: date.month === month, today: key === todayKey, items,
+        entry: items[0]?.entry ?? null, isStart: items[0]?.isStart ?? false, isEnd: items[0]?.isEnd ?? false,
       });
     }
     if (w === 5 && !days.some((d) => d.inMonth)) break;

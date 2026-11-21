@@ -33,7 +33,7 @@ export function makeScheduler({ db, shifts, rotation, notify, incidents }) {
       await notify.channel({
         text: entry.people.length
           ? `:calendar: This weekend's on-call: ${entry.people.map(mention).join(' and ')}, ${when}.` +
-            (entry.needsCover ? ` :warning: Needs ${rotation.perWeekend - entry.people.length} more — add yourself at ${config.publicUrl}/` : '')
+            (entry.needsCover ? ` :warning: Needs ${entry.shift.count - entry.people.length} more — add yourself at ${config.publicUrl}/` : '')
           : `:warning: Nobody is on call this weekend (${when}). Add yourself at ${config.publicUrl}/`,
       });
     }

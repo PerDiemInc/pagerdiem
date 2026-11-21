@@ -17,6 +17,7 @@ import {
 } from './auth.js';
 import { HttpError, readBody, parseBody, makeResponder, makeRouter } from './http.js';
 import * as views from './views.js';
+import { PRESETS, normalizeCoverage, normalizeDomains, readSetting, writeSetting, describeDays } from './settings.js';
 import { DEFAULT_ROLE, isRole, isAdmin, isResponder } from './roles.js';
 
 const cleanName = (value) => String(value || '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -26,7 +27,7 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function createApp({ db, notifierOverrides } = {}) {
   const shifts = makeShifts(config);
-  const rotation = makeRotation(db, shifts, { perWeekend: config.perWeekend });
+  const rotation = makeRotation(db, shifts);
   const notify = makeNotifier(db, notifierOverrides);
   const incidents = makeIncidents({ db, rotation, notify });
   const scheduler = makeScheduler({ db, shifts, rotation, notify, incidents });
@@ -271,7 +272,7 @@ export function createApp({ db, notifierOverrides } = {}) {
       nextEntry: onCall ? null : schedule[0],
       backup: onCall?.people.length ? await rotation.backupFor(onCall.shift) : null,
       schedule,
-      perWeekend: rotation.perWeekend,
+      coverage: shifts.coverage(),
       balance: await rotation.balance(schedule),
       recentLog: await rotation.log({ limit: 8 }),
       openIncidents: (await incidents.list()).filter((i) => i.status !== 'resolved'),
@@ -295,7 +296,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     const range = formatRange(shift, config.timezone);
     if (result.changed) {
       const { entry } = result;
-      const short = entry.needsCover ? ` :warning: Now ${entry.people.length}/${rotation.perWeekend} — needs cover.` : '';
+      const short = entry.needsCover ? ` :warning: Now ${entry.people.length}/${entry.shift.count} — needs cover.` : '';
       await notify.channel({
         text: action === 'join'
           ? `:raised_hand: ${mention(ctx.user)} added themselves to the weekend of ${range}. On call: ${entry.people.map(mention).join(', ')}.`
@@ -378,7 +379,6 @@ export function createApp({ db, notifierOverrides } = {}) {
       grid: await calendar.monthGrid({ shifts, rotation }, year, month),
       prevMonth: prev, nextMonth: next, thisMonth: ym(today.year, today.month),
       feedUrl: `${config.publicUrl}/calendar.ics?token=${calendar.feedToken()}`,
-      perWeekend: rotation.perWeekend,
       flash: takeFlash(ctx),
     }));
   });
@@ -535,11 +535,65 @@ export function createApp({ db, notifierOverrides } = {}) {
     ctx.r.redirect('/settings');
   });
 
+  /** Load what admins saved in Settings (coverage, sign-in domains). Call once at startup. */
+  async function loadSettings() {
+    const saved = await readSetting(db, 'coverage');
+    if (saved) {
+      try {
+        const { coverage } = normalizeCoverage(JSON.parse(saved));
+        if (coverage) shifts.setCoverage(coverage);
+      } catch (err) {
+        console.error('ignoring saved coverage:', err.message);
+      }
+    }
+    const domains = await readSetting(db, 'allowed_domains');
+    if (domains) config.allowedEmailDomains = domains.split(',').filter(Boolean);
+  }
+
+  router.post('/settings/coverage', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    requireAdmin(ctx);
+    const b = ctx.body;
+    const preset = PRESETS[b.preset];
+    const { coverage, error } = normalizeCoverage({
+      days: preset ? preset.days : [0, 1, 2, 3, 4, 5, 6].filter((d) => b[`day_${d}`] === '1'),
+      start: b.start, end: b.end, weekendCount: b.weekend_count, weekdayCount: b.weekday_count,
+    });
+    if (error) {
+      setFlash(ctx.r, 'error', error);
+      return ctx.r.redirect('/settings');
+    }
+    await writeSetting(db, 'coverage', JSON.stringify(coverage));
+    shifts.setCoverage(coverage);
+    await notify.channel({
+      text: `:gear: ${mention(ctx.user)} changed on-call coverage: ${describeDays(coverage.days)}, ${coverage.start} → ${coverage.end}, ` +
+        `${coverage.weekendCount} on weekend days and ${coverage.weekdayCount} on weekdays.`,
+    });
+    setFlash(ctx.r, 'ok', 'On-call coverage saved. The calendar and rotation now follow it.');
+    ctx.r.redirect('/settings');
+  });
+
+  router.post('/settings/domains', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    requireAdmin(ctx);
+    const { domains, error } = normalizeDomains(ctx.body.domains);
+    const own = ctx.user.email.split('@')[1];
+    const problem = error || (domains.includes(own) ? null : `Keep your own domain (@${own}) in the list, or you would lock yourself out.`);
+    if (problem) {
+      setFlash(ctx.r, 'error', problem);
+      return ctx.r.redirect('/settings');
+    }
+    await writeSetting(db, 'allowed_domains', domains.join(','));
+    config.allowedEmailDomains = domains;
+    setFlash(ctx.r, 'ok', `Only ${domains.map((d) => `@${d}`).join(', ')} accounts can sign in now. People already signed in stay signed in.`);
+    ctx.r.redirect('/settings');
+  });
+
   router.get('/settings', async (ctx) => {
     if (!requireUser(ctx)) return;
     requireResponder(ctx);
     ctx.r.html(views.settingsPage({
-      user: ctx.user,
+      user: ctx.user, coverage: shifts.coverage(), domains: config.allowedEmailDomains,
       status: { slack: slackEnabled(), api: Boolean(config.apiToken) },
       notifications: (await db.all('SELECT * FROM notifications ORDER BY id DESC LIMIT 30')),
       flash: takeFlash(ctx),
@@ -719,5 +773,5 @@ export function createApp({ db, notifierOverrides } = {}) {
     checkSwapsUntil ??= now.getTime();
     if (now.getTime() <= checkSwapsUntil) await announceSwaps(now);
   });
-  return { server, scheduler, rotation, announceSwaps, incidents, shifts, relinkSlackUsers, db };
+  return { server, scheduler, rotation, loadSettings, announceSwaps, incidents, shifts, relinkSlackUsers, db };
 }

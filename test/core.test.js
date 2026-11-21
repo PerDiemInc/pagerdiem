@@ -9,6 +9,7 @@ process.env.REPAGE_EVERY_MINUTES = '5';
 
 const { config } = await import('../src/config.js');
 const { makeShifts } = await import('../src/time.js');
+const { normalizeCoverage, normalizeDomains, describeDays } = await import('../src/settings.js');
 const { freshDb } = await import('./helpers.js');
 const { openDb } = await import('../src/db.js');
 const { DatabaseSync } = await import('node:sqlite');
@@ -496,7 +497,7 @@ test('the home page says a running weekend has nobody on call, and offers no Rem
     user, now, onCall: null, runningShift: running,
     nextEntry: { shift: running, people: [], joined: [], needsCover: true },
     backup: null, schedule: [{ shift: running, people: [user], joined: [], needsCover: true }],
-    perWeekend: 2, balance: [], recentLog: [], openIncidents: [], flash: null,
+    coverage: shifts.coverage(), balance: [], recentLog: [], openIncidents: [], flash: null,
   });
   assert.doesNotMatch(html, /it's a weekday/);
   assert.match(html, /Nobody is on call this weekend/);
@@ -577,4 +578,75 @@ test('API dedupe stops matching once the old incident is no longer being paged',
   const later = await incidents.create({ title: 'Checkout 5xx', dedupe: true }, at('2026-11-20T09:00:00Z'));
   assert.notEqual(later.id, first.id, 'a day-old unacknowledged incident does not swallow a new alert');
   assert.ok(!later.repeat);
+});
+
+const tz = 'America/New_York';
+const cover = (days, extra = {}) => makeShifts({ timezone: tz, coverage: { days, start: '18:00', end: '09:00', weekendCount: 2, weekdayCount: 3, ...extra } });
+
+test('weekday coverage: Mon-Fri is one shift from Monday evening to Saturday morning', () => {
+  const s = cover([1, 2, 3, 4, 5]);
+  const shift = s.forKey('2026-11-23');
+  assert.equal(shift.start.toISOString(), '2026-11-23T23:00:00.000Z');
+  assert.equal(shift.end.toISOString(), '2026-11-28T14:00:00.000Z');
+  assert.equal(shift.count, 3, 'weekdays use the weekday count');
+  assert.equal(s.current(at('2026-11-26T12:00:00Z')).key, '2026-11-23');
+  assert.equal(s.current(at('2026-11-29T12:00:00Z')), null, 'Sunday is not covered');
+  assert.equal(s.following(shift).key, '2026-11-30');
+  assert.equal(s.previous(shift).key, '2026-11-16');
+});
+
+test('two shifts a week: Mon-Thu and Sat, each with its own people count', () => {
+  const s = cover([1, 2, 3, 4, 6]);
+  const keys = [];
+  for (let sh = s.forKey('2026-11-23'); keys.length < 4; sh = s.following(sh)) keys.push(`${sh.key}:${sh.count}`);
+  assert.deepEqual(keys, ['2026-11-23:3', '2026-11-28:2', '2026-11-30:3', '2026-12-05:2']);
+  assert.equal(s.next(at('2026-11-25T12:00:00Z')).key, '2026-11-28');
+  assert.equal(s.current(at('2026-11-27T15:00:00Z')), null, 'Friday daytime is a gap');
+});
+
+test('a shift needs as many people as the busiest day it covers', () => {
+  assert.equal(cover([5, 6, 0], { weekendCount: 2, weekdayCount: 4 }).forKey('2026-11-20').count, 4, 'Fri-Sun includes a weekday');
+  assert.equal(cover([6, 0], { weekendCount: 2, weekdayCount: 4 }).forKey('2026-11-21').count, 2);
+});
+
+test('all week coverage is one continuous weekly shift', () => {
+  const s = cover([0, 1, 2, 3, 4, 5, 6]);
+  const shift = s.forKey('2026-11-23');
+  assert.equal(shift.end.toISOString(), '2026-11-30T23:00:00.000Z');
+  assert.ok(s.current(at('2026-11-25T03:00:00Z')));
+  assert.equal(s.current(at('2026-11-30T22:59:00Z')).key, '2026-11-23');
+  assert.equal(s.current(at('2026-11-30T23:00:00Z')).key, '2026-11-30');
+});
+
+test('changing coverage while running changes the shifts', () => {
+  const s = cover([5, 6, 0]);
+  assert.equal(s.next(at('2026-11-18T12:00:00Z')).key, '2026-11-20');
+  s.setCoverage({ days: [1, 2, 3, 4, 5], start: '17:00', end: '08:00', weekendCount: 2, weekdayCount: 2 });
+  assert.equal(s.next(at('2026-11-18T12:00:00Z')).key, '2026-11-23');
+});
+
+test('the rotation puts the shift count of people on each shift', async () => {
+  const { db, addUsers } = await setup();
+  await addUsers('Ana', 'Ben', 'Cal', 'Dee');
+  const three = cover([5, 6, 0], { weekendCount: 3, weekdayCount: 3 });
+  const sched = await makeRotation(db, three).schedule(three.forKey('2026-11-20'), 2);
+  assert.deepEqual(sched.map((e) => e.people.length), [3, 3]);
+  assert.ok(sched.every((e) => !e.needsCover));
+});
+
+test('coverage and domain settings are validated', () => {
+  const ok = { days: [5, 6, 0], start: '18:00', end: '09:00', weekendCount: 2, weekdayCount: 2 };
+  assert.ok(normalizeCoverage(ok).coverage);
+  assert.match(normalizeCoverage({ ...ok, days: [] }).error, /at least one day/);
+  assert.match(normalizeCoverage({ ...ok, start: '25:00' }).error, /Start time/);
+  assert.match(normalizeCoverage({ ...ok, end: '9am' }).error, /End time/);
+  assert.match(normalizeCoverage({ ...ok, weekendCount: 0 }).error, /1 to 10/);
+  assert.match(normalizeCoverage({ ...ok, weekdayCount: 11 }).error, /1 to 10/);
+  assert.deepEqual(normalizeDomains('@Example.com, example.org  example.com').domains, ['example.com', 'example.org']);
+  assert.match(normalizeDomains('').error, /at least one/);
+  assert.match(normalizeDomains('not a domain!, x').error, /not a valid domain/);
+  assert.equal(describeDays([5, 6, 0]), 'Fri–Sun');
+  assert.equal(describeDays([1, 3, 6]), 'Mon, Wed, Sat');
+  assert.equal(describeDays([1, 2, 3, 4, 5]), 'Mon–Fri');
+  assert.equal(describeDays([0, 1, 2, 3, 4, 5, 6]), 'every day');
 });
