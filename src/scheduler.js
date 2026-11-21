@@ -11,14 +11,14 @@ export function makeScheduler({ db, shifts, rotation, notify, incidents }) {
   const fmt = (d) => formatLocal(d, config.timezone);
   // Weekends whose reminder / start / end this process has already handled. Without these, each
   // job would re-read the database every minute and a serverless database would never sleep.
-  const done = { reminder: new Set(), start: new Set(), end: new Set() };
+  const done = { reminder: new Map(), start: new Set(), end: new Set() };
 
   const names = (people) => people.map((p) => p.name).join(' and ');
 
   async function shiftReminder(now) {
     const next = shifts.next(now);
     const remindAt = next.start.getTime() - config.reminderHoursBefore * HOUR;
-    if (now.getTime() < remindAt || now >= next.start || done.reminder.has(next.key)) return;
+    if (now.getTime() < remindAt || now >= next.start || now - (done.reminder.get(next.key) ?? 0) < 30 * 60_000) return;
     const entry = await rotation.forShift(next);
     const when = `${fmt(next.start)} → ${fmt(next.end)}`;
     for (const person of entry.people) {
@@ -37,16 +37,15 @@ export function makeScheduler({ db, shifts, rotation, notify, incidents }) {
           : `:warning: Nobody is on call this weekend (${when}). Add yourself at ${config.publicUrl}/`,
       });
     }
-    done.reminder.add(next.key);
+    done.reminder.set(next.key, now.getTime());
   }
 
   async function shiftStart(now) {
     const current = shifts.current(now);
     if (!current || done.start.has(current.key)) return;
     const entry = await rotation.lock(current);
+    if (await claimOnce(db, `start:${current.key}`)) await announceWeekendStart(current, entry);
     done.start.add(current.key);
-    if (!(await claimOnce(db, `start:${current.key}`))) return;
-    await announceWeekendStart(current, entry);
   }
 
   /** "You're on call now" to each person, plus the channel post. */
@@ -68,9 +67,8 @@ export function makeScheduler({ db, shifts, rotation, notify, incidents }) {
     const current = shifts.current(now);
     const prev = shifts.previous(current || shifts.next(now));
     if (now < prev.end || now - prev.end > 6 * HOUR || done.end.has(prev.key)) return;
-    done.end.add(prev.key);
     const ended = await rotation.forShift(prev);
-    if (!ended.locked || !(await claimOnce(db, `end:${prev.key}`))) return;
+    if (!ended.locked || !(await claimOnce(db, `end:${prev.key}`))) { done.end.add(prev.key); return; }
     const nextEntry = await rotation.forShift(shifts.next(now));
     const count = (await db.get('SELECT COUNT(*) AS n FROM incidents WHERE created_at >= ? AND created_at < ?',
       [prev.start.toISOString(), prev.end.toISOString()])).n;
@@ -78,6 +76,7 @@ export function makeScheduler({ db, shifts, rotation, notify, incidents }) {
       text: `:white_check_mark: Weekend on-call finished — thanks ${ended.people.map(mention).join(' and ') || 'team'}! ` +
         `${count} incident${count === 1 ? '' : 's'} this weekend. Next up: ${nextEntry.people.map(mention).join(' and ') || 'nobody yet'}.`,
     });
+    done.end.add(prev.key);
   }
 
   const extraSteps = [];

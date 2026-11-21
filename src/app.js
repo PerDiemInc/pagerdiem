@@ -9,7 +9,7 @@ import { makeRotation } from './rotation.js';
 import { makeNotifier } from './notify/index.js';
 import { makeIncidents } from './incidents.js';
 import { makeScheduler } from './scheduler.js';
-import { lookupUserIdByEmail, verifySlackSignature, mention } from './notify/slack.js';
+import { lookupUserIdByEmail, verifySlackSignature, mention, slackText } from './notify/slack.js';
 import { normalizePhone } from './phone.js';
 import {
   hashPassword, verifyPassword, sessionCookie, clearSessionCookie, sessionUserId, parseCookies, safeEqual,
@@ -19,6 +19,8 @@ import { HttpError, readBody, parseBody, makeResponder, makeRouter } from './htt
 import * as views from './views.js';
 import { DEFAULT_ROLE, isRole, isAdmin, isResponder } from './roles.js';
 
+const cleanName = (value) => String(value || '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+const safeBack = (value, fallback) => (/^\/(?![/\\])[^\r\n\\]*$/.test(String(value || '')) ? value : fallback);
 const SLACK_ID = /^[UW][A-Z0-9]{6,}$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -104,7 +106,7 @@ export function createApp({ db, notifierOverrides } = {}) {
    * phone number. Returns { user } or { error }.
    */
   async function createMember({ name, email, slack, whatsapp: rawPhone, passwordHash }) {
-    name = String(name || '').trim().slice(0, 80);
+    name = cleanName(name);
     const whatsapp = normalizePhone(rawPhone);
     if (!name) return { error: 'Please enter your name.' };
     if (!whatsapp) return { error: 'Please enter your phone number with country code, e.g. +1 415 555 0123.' };
@@ -337,10 +339,10 @@ export function createApp({ db, notifierOverrides } = {}) {
       undone = await rotation.undoSwap(Number(ctx.params.id), ctx.user);
     } catch (err) {
       setFlash(ctx.r, 'error', err.message);
-      return ctx.r.redirect(ctx.body.back || '/calendar');
+      return ctx.r.redirect(safeBack(ctx.body.back, '/calendar'));
     }
     setFlash(ctx.r, 'ok', undone ? 'Swap undone. Nothing changed and nobody was notified.' : 'Already undone.');
-    ctx.r.redirect(ctx.body.back || '/calendar');
+    ctx.r.redirect(safeBack(ctx.body.back, '/calendar'));
   });
 
   /** Tell Slack and the replaced person about swaps whose undo window has passed. */
@@ -453,6 +455,14 @@ export function createApp({ db, notifierOverrides } = {}) {
     requireAdmin(ctx);
     const active = ctx.body.active === '1' ? 1 : 0;
     const id = Number(ctx.params.id);
+    if (!active) {
+      const target = await rotation.userById(id);
+      const admins = await db.get("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1");
+      if (target?.role === 'admin' && target.active && admins.n <= 1) {
+        setFlash(ctx.r, 'error', 'There must be at least one admin. Make someone else an admin first.');
+        return ctx.r.redirect('/team');
+      }
+    }
     if (active) await db.run('UPDATE users SET active = 1, rotation_order = ? WHERE id = ?', [await rotation.nextRotationOrder(), id]);
     else await db.run('UPDATE users SET active = 0 WHERE id = ?', [id]);
     setFlash(ctx.r, 'ok', active ? 'Added back to the end of the rotation.' : 'Removed from the rotation.');
@@ -480,7 +490,7 @@ export function createApp({ db, notifierOverrides } = {}) {
 
   router.post('/profile', async (ctx) => {
     if (!requireUser(ctx)) return;
-    const name = String(ctx.body.name || '').trim().slice(0, 80);
+    const name = cleanName(ctx.body.name);
     const whatsapp = normalizePhone(ctx.body.whatsapp);
     if (!name || !whatsapp) {
       setFlash(ctx.r, 'error', 'Name and a phone number with country code are required.');
@@ -581,7 +591,7 @@ export function createApp({ db, notifierOverrides } = {}) {
         .catch((err) => console.error('slack /page failed:', err));
       return ctx.r.json({
         response_type: 'in_channel',
-        text: onCall?.people.length ? `:rotating_light: Paging ${onCall.people.map(mention).join(' and ')}: *${what}*` : `:rotating_light: *${what}* — nobody is on call, alerting the channel.`,
+        text: onCall?.people.length ? `:rotating_light: Paging ${onCall.people.map(mention).join(' and ')}: *${slackText(what)}*` : `:rotating_light: *${slackText(what)}* — nobody is on call, alerting the channel.`,
       });
     }
     return ctx.r.json({ response_type: 'ephemeral', text: (await onCallSummary()) });
@@ -596,19 +606,19 @@ export function createApp({ db, notifierOverrides } = {}) {
     if (!action || !['ack', 'resolve'].includes(action.action_id)) return;
     const user = (await userBySlack(payload.user?.id));
     const id = Number(action.value);
-    if (user && !isResponder(user)) {
+    if (!user || !user.active || !isResponder(user)) {
       if (payload.response_url) {
         fetch(payload.response_url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ replace_original: false, response_type: 'ephemeral', text: 'Only engineers and admins can acknowledge or resolve incidents.' }),
+          body: JSON.stringify({ replace_original: false, response_type: 'ephemeral', text: 'Only engineers and admins with a PagerDiem account can acknowledge or resolve incidents.' }),
         }).catch((err) => console.error('slack interaction failed:', err));
       }
       return;
     }
     (async () => {
       const fn = action.action_id === 'ack' ? incidents.acknowledge : incidents.resolve;
-      const { changed, incident } = await fn(id, user || { name: `<@${payload.user?.id}>` }, 'slack');
+      const { changed, incident } = await fn(id, user, 'slack');
       if (payload.response_url) {
         await fetch(payload.response_url, {
           method: 'POST',
@@ -654,12 +664,32 @@ export function createApp({ db, notifierOverrides } = {}) {
   router.get('/healthz', async (ctx) => ctx.r.json({ ok: true }));
 
   // ---------- server ----------
+  // Browsers send Sec-Fetch-Site / Origin on form posts. Slack and the API authenticate with a
+  // signature or token instead, so they are exempt.
+  function isSameOrigin(req, pathname) {
+    if (pathname.startsWith('/slack/') || pathname.startsWith('/api/')) return true;
+    const site = req.headers['sec-fetch-site'];
+    if (site && !['same-origin', 'none'].includes(site)) return false;
+    const origin = req.headers.origin;
+    if (origin && origin !== 'null') {
+      try { return new URL(origin).host === new URL(config.publicUrl).host || new URL(origin).host === req.headers.host; } catch { return false; }
+    }
+    return origin !== 'null';
+  }
+
   async function handle(req, res) {
     const r = makeResponder(res);
-    const url = new URL(req.url, 'http://localhost');
+    let url = new URL('http://localhost/');
     const ctx = { req, r, query: url.searchParams, params: {}, body: {}, raw: '', user: null,
       ip: req.socket.remoteAddress };
     try {
+      try {
+        url = new URL(req.url, 'http://localhost');
+      } catch {
+        throw new HttpError(400, 'Bad request');
+      }
+      ctx.query = url.searchParams;
+      if (req.method === 'POST' && !isSameOrigin(req, url.pathname)) throw new HttpError(403, 'Cross-site request blocked');
       const found = router.match(req.method, url.pathname);
       if (!found) throw new HttpError(404, 'Not found');
       ctx.params = found.params;

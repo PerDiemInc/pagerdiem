@@ -25,6 +25,8 @@ if (config.keepAwake && config.publicUrl.startsWith('https://')) {
   console.log('  Keep-awake ping: every 10 min');
 }
 
+process.on('unhandledRejection', (err) => console.error('unhandled rejection:', err));
+
 function shutdown() {
   clearInterval(keepAwakeTimer);
   app.scheduler.stop();

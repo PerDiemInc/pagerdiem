@@ -1,7 +1,7 @@
 // Incidents: trigger -> page on-call -> re-page -> escalate to backup -> alert channel.
 import crypto from 'node:crypto';
 import { config } from './config.js';
-import { mention, engineersTag } from './notify/slack.js';
+import { mention, engineersTag, slackText } from './notify/slack.js';
 
 const MINUTE = 60_000;
 // Automatic paging gives up on an incident nobody acknowledged within a day: by then it has been
@@ -9,7 +9,7 @@ const MINUTE = 60_000;
 const PAGE_FOR = 24 * 60 * MINUTE;
 
 export function makeIncidents({ db, rotation, notify }) {
-  const get = async (id) => (await db.get('SELECT * FROM incidents WHERE id = ?', [id])) ?? null;
+  const get = async (id) => (Number.isSafeInteger(id) ? (await db.get('SELECT * FROM incidents WHERE id = ?', [id])) ?? null : null);
   const userById = async (id) => (id ? rotation.userById(id) : null);
   const incUrl = (inc) => `${config.publicUrl}/incidents/${inc.id}`;
 
@@ -45,8 +45,8 @@ export function makeIncidents({ db, rotation, notify }) {
 
   /** Page one person about an incident by Slack DM. */
   async function page(inc, user, reason) {
-    const details = inc.details ? `\n${inc.details}` : '';
-    const text = `:rotating_light: *Incident #${inc.id}: ${inc.title}*${details}\n${reason}`;
+    const details = inc.details ? `\n${slackText(inc.details)}` : '';
+    const text = `:rotating_light: *Incident #${inc.id}: ${slackText(inc.title)}*${details}\n${reason}`;
     await notify.user(user, { text, blocks: pageBlocks(inc, text), incidentId: inc.id });
   }
 
@@ -60,8 +60,8 @@ export function makeIncidents({ db, rotation, notify }) {
     details = String(details || '').trim().slice(0, 4000);
 
     if (dedupe) {
-      const same = await db.get(`SELECT id FROM incidents WHERE status != 'resolved' AND LOWER(title) = LOWER(?)
-                                 ORDER BY id DESC LIMIT 1`, [title]);
+      const same = await db.get(`SELECT id FROM incidents WHERE status != 'resolved' AND created_at >= ? AND LOWER(title) = LOWER(?)
+                                 ORDER BY id DESC LIMIT 1`, [new Date(now.getTime() - PAGE_FOR).toISOString(), title]);
       if (same) {
         await event(same.id, `Same alert again via ${source}`, now);
         return { ...(await get(same.id)), repeat: true };
@@ -75,13 +75,13 @@ export function makeIncidents({ db, rotation, notify }) {
     const backup = onCall ? await rotation.backupFor(onCall.shift) : null;
     const iso = now.toISOString();
 
-    created += 1;
-    idle = false;
     const { id: newId } = (await db.get(`
       INSERT INTO incidents (title, details, source, assigned_user_id, backup_user_id, escalation_level,
                              ack_token, created_by, created_at, last_paged_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`, [title, details, source, assigned?.id ?? null, backup?.id ?? null, onCall ? 0 : 2,
       crypto.randomBytes(16).toString('hex'), createdBy, iso, iso]));
+    created += 1;
+    idle = false;
     const inc = await get(Number(newId));
     const creator = await userById(createdBy);
     await event(inc.id, `Triggered via ${source}${creator ? ` by ${creator.name}` : ''}`, now);
@@ -90,7 +90,7 @@ export function makeIncidents({ db, rotation, notify }) {
       await event(inc.id, `Paged ${people.map((p) => p.name).join(' and ')} (on call)`, now);
       for (const p of people) await page(inc, p, 'You are on call. Please acknowledge.');
       await notify.channel({
-        text: `${engineersTag()}${engineersTag() ? ' ' : ''}:rotating_light: Incident #${inc.id}: *${inc.title}* — paging ${people.map(mention).join(' and ')} (on call). ${incUrl(inc)}`,
+        text: `${engineersTag()}${engineersTag() ? ' ' : ''}:rotating_light: Incident #${inc.id}: *${slackText(inc.title)}* — paging ${people.map(mention).join(' and ')} (on call). ${incUrl(inc)}`,
         incidentId: inc.id,
       });
     } else {
@@ -98,9 +98,9 @@ export function makeIncidents({ db, rotation, notify }) {
       const when = onCall ? 'this weekend' : 'right now';
       await event(inc.id, `Nobody is on call ${when} — alerted the team channel`, now);
       await notify.channel({
-        text: `${engineersTag('<!here>')} :rotating_light: Incident #${inc.id}: *${inc.title}* — nobody is on call ${when}, ` +
+        text: `${engineersTag('<!here>')} :rotating_light: Incident #${inc.id}: *${slackText(inc.title)}* — nobody is on call ${when}, ` +
           `can someone take it? ${incUrl(inc)}`,
-        blocks: pageBlocks(inc, `${engineersTag('<!here>')} :rotating_light: *Incident #${inc.id}: ${inc.title}*\nNobody is on call ${when} — can someone take it?`),
+        blocks: pageBlocks(inc, `${engineersTag('<!here>')} :rotating_light: *Incident #${inc.id}: ${slackText(inc.title)}*\nNobody is on call ${when} — can someone take it?`),
         incidentId: inc.id,
       });
     }
@@ -123,7 +123,7 @@ export function makeIncidents({ db, rotation, notify }) {
     if (!changes) return { incident: await get(id), changed: false };
     await event(id, `Acknowledged by ${user?.name ?? 'someone'} via ${via}`, now);
     await notify.channel({
-      text: `:eyes: Incident #${id} *${inc.title}* acknowledged by ${mention(user)}.${await onCallTags(inc, user)}`, incidentId: id,
+      text: `:eyes: Incident #${id} *${slackText(inc.title)}* acknowledged by ${mention(user)}.${await onCallTags(inc, user)}`, incidentId: id,
     });
     return { incident: await get(id), changed: true };
   }
@@ -137,7 +137,7 @@ export function makeIncidents({ db, rotation, notify }) {
     if (!changes) return { incident: await get(id), changed: false };
     await event(id, `Resolved by ${user?.name ?? 'someone'} via ${via}`, now);
     await notify.channel({
-      text: `:white_check_mark: Incident #${id} *${inc.title}* resolved by ${mention(user)}.${await onCallTags(inc, user)}`, incidentId: id,
+      text: `:white_check_mark: Incident #${id} *${slackText(inc.title)}* resolved by ${mention(user)}.${await onCallTags(inc, user)}`, incidentId: id,
     });
     return { incident: await get(id), changed: true };
   }
@@ -172,9 +172,9 @@ export function makeIncidents({ db, rotation, notify }) {
         if (sincePage < 2 * escalateAfter || !(await claim(2))) continue;
         await event(inc.id, `Still not acknowledged after ${minutes} min — reminded the team channel`, now);
         await notify.channel({
-          text: `${engineersTag('<!here>')} :rotating_light: Incident #${inc.id} *${inc.title}* is still not acknowledged after ${minutes} min. ` +
+          text: `${engineersTag('<!here>')} :rotating_light: Incident #${inc.id} *${slackText(inc.title)}* is still not acknowledged after ${minutes} min. ` +
             `Can someone take it? ${incUrl(inc)}`,
-          blocks: pageBlocks(inc, `${engineersTag('<!here>')} :rotating_light: *Incident #${inc.id}: ${inc.title}*\nStill not acknowledged after ${minutes} min. Can someone take it?`),
+          blocks: pageBlocks(inc, `${engineersTag('<!here>')} :rotating_light: *Incident #${inc.id}: ${slackText(inc.title)}*\nStill not acknowledged after ${minutes} min. Can someone take it?`),
           incidentId: inc.id,
         });
         continue;
@@ -193,9 +193,9 @@ export function makeIncidents({ db, rotation, notify }) {
         if (!(await claim(2))) return;
         await event(inc.id, `Not acknowledged after ${minutes} min — alerted the whole team channel`, now);
         await notify.channel({
-          text: `${engineersTag('<!channel>')} :fire: Incident #${inc.id} *${inc.title}* has not been acknowledged for ${minutes} min. ` +
+          text: `${engineersTag('<!channel>')} :fire: Incident #${inc.id} *${slackText(inc.title)}* has not been acknowledged for ${minutes} min. ` +
             `Can anyone take it? ${incUrl(inc)}`,
-          blocks: pageBlocks(inc, `${engineersTag('<!channel>')} :fire: *Incident #${inc.id}: ${inc.title}*\nNot acknowledged for ${minutes} min. Can anyone take it?`),
+          blocks: pageBlocks(inc, `${engineersTag('<!channel>')} :fire: *Incident #${inc.id}: ${slackText(inc.title)}*\nNot acknowledged for ${minutes} min. Can anyone take it?`),
           incidentId: inc.id,
         });
       };
@@ -210,7 +210,7 @@ export function makeIncidents({ db, rotation, notify }) {
           : `Nobody is on call this weekend and nobody has acknowledged in ${minutes} min. You're the backup.`);
         for (const p of responders) await page(inc, p, `Still not acknowledged after ${minutes} min — escalated to ${backup.name}.`);
         await notify.channel({
-          text: `:warning: Incident #${inc.id} *${inc.title}* not acknowledged${responders.length ? ` by ${responders.map(mention).join(' or ')}` : ''} after ${minutes} min — ` +
+          text: `:warning: Incident #${inc.id} *${slackText(inc.title)}* not acknowledged${responders.length ? ` by ${responders.map(mention).join(' or ')}` : ''} after ${minutes} min — ` +
             `escalating to ${mention(backup)}.`,
           incidentId: inc.id,
         });
