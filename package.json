@@ -2,6 +2,23 @@
   "name": "pagerdiem",
   "version": "0.1.0",
   "description": "Self-hosted weekend on-call rotation and paging with Google sign-in and Slack.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PerDiemInc/pagerdiem.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PerDiemInc/pagerdiem/issues"
+  },
+  "homepage": "https://perdieminc.github.io/pagerdiem/",
+  "keywords": [
+    "on-call",
+    "pager",
+    "slack",
+    "rotation",
+    "incident",
+    "self-hosted"
+  ],
   "type": "module",
   "private": true,
   "engines": {

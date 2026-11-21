@@ -1,5 +1,9 @@
 # PagerDiem 📟
 
+[![ci](https://github.com/PerDiemInc/pagerdiem/actions/workflows/ci.yml/badge.svg)](https://github.com/PerDiemInc/pagerdiem/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[Project site](https://perdieminc.github.io/pagerdiem/)
+
 **Self-hosted weekend on-call for small engineering teams.** A fair rotation, Slack paging with
 escalation, a shared calendar, and sign-in locked to your Google Workspace. One Node.js process,
 one database, no per-seat pricing.
@@ -111,6 +115,22 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 - Adding yourself, removing yourself or swapping only changes that one weekend.
 - The backup for a weekend is the first person on the next weekend who isn't already on call.
 
+## Roles
+
+Every person has one role, set by an admin on the **Team** page. The first person to sign up is an admin; everyone after starts as *non-technical* until an admin changes it.
+
+| | Admin | Engineer | Non-technical |
+|---|---|---|---|
+| View the calendar, audit log and incidents | ✅ | ✅ | ✅ |
+| Trigger an alert (web, `/page`, API) | ✅ | ✅ | ✅ |
+| On the automatic rotation | optional | ✅ | never |
+| Add or remove yourself, swap weekends | ✅ | ✅ | ❌ |
+| Acknowledge or resolve incidents | ✅ | ✅ | ❌ |
+| Open Team and Settings | ✅ | ✅ | ❌ |
+| Change roles, reorder or remove people | ✅ | ❌ | ❌ |
+
+Databases created before roles existed are migrated on first start: admins stay admin and everyone else becomes an engineer.
+
 ## Security model
 
 - Production sign-in is Google only, restricted to `ALLOWED_EMAIL_DOMAINS` on a Workspace-managed account. Set the OAuth consent screen to **Internal** for a second lock at Google's end.
@@ -134,6 +154,8 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 | `src/notify/` | Slack client and dry-run logging |
 | `src/app.js` | Routes: web pages, Slack commands and buttons, API |
 | `src/views.js` | HTML pages |
+
+CI runs the tests on Node 22 and 24 with SQLite, and on Postgres 16. The project site in `docs/` is published to GitHub Pages by `.github/workflows/pages.yml`.
 
 Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
