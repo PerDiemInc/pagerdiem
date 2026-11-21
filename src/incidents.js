@@ -4,11 +4,20 @@ import { config } from './config.js';
 import { mention, engineersTag } from './notify/slack.js';
 
 const MINUTE = 60_000;
+// Automatic paging gives up on an incident nobody acknowledged within a day: by then it has been
+// paged hundreds of times, and a forgotten one must not page people (or keep the database awake) forever.
+const PAGE_FOR = 24 * 60 * MINUTE;
 
 export function makeIncidents({ db, rotation, notify }) {
   const get = async (id) => (await db.get('SELECT * FROM incidents WHERE id = ?', [id])) ?? null;
   const userById = async (id) => (id ? rotation.userById(id) : null);
   const incUrl = (inc) => `${config.publicUrl}/incidents/${inc.id}`;
+
+  // The scheduler calls tick() every minute. Querying each time keeps a serverless database (Neon)
+  // awake around the clock, so once a tick finds nothing open we stop asking until an incident is
+  // created in this process. `created` guards against one being created while a tick is reading.
+  let idle = false;
+  let created = 0;
 
   async function event(incidentId, message, at = new Date()) {
     (await db.run('INSERT INTO incident_events (incident_id, at, message) VALUES (?, ?, ?)', [incidentId, at.toISOString(), message]));
@@ -41,21 +50,37 @@ export function makeIncidents({ db, rotation, notify }) {
     await notify.user(user, { text, blocks: pageBlocks(inc, text), incidentId: inc.id });
   }
 
-  async function create({ title, details = '', source = 'web', createdBy = null }, now = new Date()) {
+  /**
+   * `dedupe` is for monitors that fire the same alert every minute: while an incident with the
+   * same title is still unresolved, the repeat is noted on it and nobody is paged again.
+   */
+  async function create({ title, details = '', source = 'web', createdBy = null, dedupe = false }, now = new Date()) {
     title = String(title || '').trim().slice(0, 200);
     if (!title) throw new Error('A title is required');
     details = String(details || '').trim().slice(0, 4000);
 
-    const onCall = await rotation.onCallNow(now);
+    if (dedupe) {
+      const same = await db.get(`SELECT id FROM incidents WHERE status != 'resolved' AND LOWER(title) = LOWER(?)
+                                 ORDER BY id DESC LIMIT 1`, [title]);
+      if (same) {
+        await event(same.id, `Same alert again via ${source}`, now);
+        return { ...(await get(same.id)), repeat: true };
+      }
+    }
+
+    const onCall = await rotation.onCallNow(now); // null on weekdays
     const people = onCall?.people ?? [];
     const assigned = people[0] ?? null; // shown as "on call"; everyone in `people` is paged
-    const backup = people.length ? await rotation.backupFor(onCall.shift) : null;
+    // A weekend with nobody on call still escalates (admins, then the backup); weekdays go straight to the channel.
+    const backup = onCall ? await rotation.backupFor(onCall.shift) : null;
     const iso = now.toISOString();
 
+    created += 1;
+    idle = false;
     const { id: newId } = (await db.get(`
       INSERT INTO incidents (title, details, source, assigned_user_id, backup_user_id, escalation_level,
                              ack_token, created_by, created_at, last_paged_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`, [title, details, source, assigned?.id ?? null, backup?.id ?? null, assigned ? 0 : 2,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`, [title, details, source, assigned?.id ?? null, backup?.id ?? null, onCall ? 0 : 2,
       crypto.randomBytes(16).toString('hex'), createdBy, iso, iso]));
     const inc = await get(Number(newId));
     const creator = await userById(createdBy);
@@ -69,12 +94,13 @@ export function makeIncidents({ db, rotation, notify }) {
         incidentId: inc.id,
       });
     } else {
-      // Weekday or empty rotation: nobody is on call, so the whole team gets it.
-      await event(inc.id, 'Nobody is on call right now — alerted the team channel', now);
+      // Weekday or empty weekend: nobody is on call, so the whole team gets it.
+      const when = onCall ? 'this weekend' : 'right now';
+      await event(inc.id, `Nobody is on call ${when} — alerted the team channel`, now);
       await notify.channel({
-        text: `${engineersTag('<!here>')} :rotating_light: Incident #${inc.id}: *${inc.title}* — nobody is on call right now, ` +
+        text: `${engineersTag('<!here>')} :rotating_light: Incident #${inc.id}: *${inc.title}* — nobody is on call ${when}, ` +
           `can someone take it? ${incUrl(inc)}`,
-        blocks: pageBlocks(inc, `${engineersTag('<!here>')} :rotating_light: *Incident #${inc.id}: ${inc.title}*\nNobody is on call right now — can someone take it?`),
+        blocks: pageBlocks(inc, `${engineersTag('<!here>')} :rotating_light: *Incident #${inc.id}: ${inc.title}*\nNobody is on call ${when} — can someone take it?`),
         incidentId: inc.id,
       });
     }
@@ -92,7 +118,9 @@ export function makeIncidents({ db, rotation, notify }) {
     const inc = await get(id);
     if (!inc) throw new Error('Incident not found');
     if (inc.status !== 'open') return { incident: inc, changed: false };
-    (await db.run(`UPDATE incidents SET status = 'acknowledged', acked_at = ?, acked_by = ? WHERE id = ? AND status = 'open'`, [now.toISOString(), user?.id ?? null, id]));
+    // Two people can tap Acknowledge at once: only the one whose update lands announces it.
+    const { changes } = await db.run(`UPDATE incidents SET status = 'acknowledged', acked_at = ?, acked_by = ? WHERE id = ? AND status = 'open'`, [now.toISOString(), user?.id ?? null, id]);
+    if (!changes) return { incident: await get(id), changed: false };
     await event(id, `Acknowledged by ${user?.name ?? 'someone'} via ${via}`, now);
     await notify.channel({
       text: `:eyes: Incident #${id} *${inc.title}* acknowledged by ${mention(user)}.${await onCallTags(inc, user)}`, incidentId: id,
@@ -104,8 +132,9 @@ export function makeIncidents({ db, rotation, notify }) {
     const inc = await get(id);
     if (!inc) throw new Error('Incident not found');
     if (inc.status === 'resolved') return { incident: inc, changed: false };
-    (await db.run(`UPDATE incidents SET status = 'resolved', resolved_at = ?, resolved_by = ?,
-                acked_at = COALESCE(acked_at, ?), acked_by = COALESCE(acked_by, ?) WHERE id = ?`, [now.toISOString(), user?.id ?? null, now.toISOString(), user?.id ?? null, id]));
+    const { changes } = await db.run(`UPDATE incidents SET status = 'resolved', resolved_at = ?, resolved_by = ?,
+                acked_at = COALESCE(acked_at, ?), acked_by = COALESCE(acked_by, ?) WHERE id = ? AND status != 'resolved'`, [now.toISOString(), user?.id ?? null, now.toISOString(), user?.id ?? null, id]);
+    if (!changes) return { incident: await get(id), changed: false };
     await event(id, `Resolved by ${user?.name ?? 'someone'} via ${via}`, now);
     await notify.channel({
       text: `:white_check_mark: Incident #${id} *${inc.title}* resolved by ${mention(user)}.${await onCallTags(inc, user)}`, incidentId: id,
@@ -113,24 +142,55 @@ export function makeIncidents({ db, rotation, notify }) {
     return { incident: await get(id), changed: true };
   }
 
-  /** Called every minute: re-page and escalate incidents nobody has acknowledged. */
+  /**
+   * Called every minute: re-page and escalate incidents nobody has acknowledged.
+   * Weekend: on-call (or the admins, if nobody is on call) -> backup at 15 min -> @channel at 30 min,
+   * then everyone so far is paged again every 5 min until someone acknowledges.
+   * Weekday: nobody is on call, so the channel is reminded every 30 min instead.
+   */
   async function tick(now = new Date()) {
-    const open = (await db.all(`SELECT * FROM incidents WHERE status = 'open' AND escalation_level < 2`));
+    if (idle) return;
+    const seen = created;
+    const open = (await db.all(`SELECT * FROM incidents WHERE status = 'open' AND created_at >= ?`,
+      [new Date(now.getTime() - PAGE_FOR).toISOString()]));
+    if (!open.length && seen === created) idle = true;
     for (const inc of open) {
       const age = now - new Date(inc.created_at);
       const sincePage = now - new Date(inc.last_paged_at);
-      const assigned = await userById(inc.assigned_user_id);
-      const backup = await userById(inc.backup_user_id);
-      // Everyone on call that weekend (including anyone who added themselves since).
-      const onCallThen = await rotation.onCallNow(new Date(inc.created_at));
-      const onCallPeople = onCallThen?.people?.length ? onCallThen.people : [assigned].filter(Boolean);
-      const names = onCallPeople.map((p) => p.name).join(' and ') || 'The on-call';
       const minutes = Math.round(age / MINUTE);
-
       const escalateAfter = config.escalateAfterMinutes * MINUTE;
 
+      // Each step claims the incident as it was read. If someone acknowledged it meanwhile, or
+      // another scheduler run already took this step, the update changes nothing and we send nothing.
+      const claim = async (level) => (await db.run(
+        `UPDATE incidents SET escalation_level = ?, last_paged_at = ?
+         WHERE id = ? AND status = 'open' AND escalation_level = ? AND last_paged_at = ?`,
+        [level, now.toISOString(), inc.id, inc.escalation_level, inc.last_paged_at])).changes === 1;
+
+      const onCallThen = await rotation.onCallNow(new Date(inc.created_at));
+      if (!onCallThen) {
+        if (sincePage < 2 * escalateAfter || !(await claim(2))) continue;
+        await event(inc.id, `Still not acknowledged after ${minutes} min — reminded the team channel`, now);
+        await notify.channel({
+          text: `${engineersTag('<!here>')} :rotating_light: Incident #${inc.id} *${inc.title}* is still not acknowledged after ${minutes} min. ` +
+            `Can someone take it? ${incUrl(inc)}`,
+          blocks: pageBlocks(inc, `${engineersTag('<!here>')} :rotating_light: *Incident #${inc.id}: ${inc.title}*\nStill not acknowledged after ${minutes} min. Can someone take it?`),
+          incidentId: inc.id,
+        });
+        continue;
+      }
+
+      const assigned = await userById(inc.assigned_user_id);
+      const backup = await userById(inc.backup_user_id);
+      // Everyone on call that weekend (including anyone who added themselves since); with nobody
+      // on call, the admins stand in.
+      const onCallPeople = onCallThen.people.length ? onCallThen.people : [assigned].filter(Boolean);
+      const responders = onCallPeople.length ? onCallPeople
+        : await db.all("SELECT * FROM users WHERE active = 1 AND role = 'admin' ORDER BY id");
+      const names = onCallPeople.map((p) => p.name).join(' and ');
+
       const alertWholeChannel = async () => {
-        (await db.run('UPDATE incidents SET escalation_level = 2, last_paged_at = ? WHERE id = ?', [now.toISOString(), inc.id]));
+        if (!(await claim(2))) return;
         await event(inc.id, `Not acknowledged after ${minutes} min — alerted the whole team channel`, now);
         await notify.channel({
           text: `${engineersTag('<!channel>')} :fire: Incident #${inc.id} *${inc.title}* has not been acknowledged for ${minutes} min. ` +
@@ -143,12 +203,14 @@ export function makeIncidents({ db, rotation, notify }) {
       // Step 1: on-call didn't respond -> page the backup (or the channel if there is none).
       if (inc.escalation_level === 0 && age >= escalateAfter) {
         if (!backup) { await alertWholeChannel(); continue; }
-        (await db.run('UPDATE incidents SET escalation_level = 1, last_paged_at = ? WHERE id = ?', [now.toISOString(), inc.id]));
+        if (!(await claim(1))) continue;
         await event(inc.id, `Not acknowledged after ${minutes} min — escalated to ${backup.name} (backup)`, now);
-        await page(inc, backup, `${names} hasn't acknowledged in ${minutes} min. You're the backup.`);
-        for (const p of onCallPeople) await page(inc, p, `Still not acknowledged after ${minutes} min — escalated to ${backup.name}.`);
+        await page(inc, backup, onCallPeople.length
+          ? `${names} hasn't acknowledged in ${minutes} min. You're the backup.`
+          : `Nobody is on call this weekend and nobody has acknowledged in ${minutes} min. You're the backup.`);
+        for (const p of responders) await page(inc, p, `Still not acknowledged after ${minutes} min — escalated to ${backup.name}.`);
         await notify.channel({
-          text: `:warning: Incident #${inc.id} *${inc.title}* not acknowledged by ${onCallPeople.map(mention).join(' or ')} after ${minutes} min — ` +
+          text: `:warning: Incident #${inc.id} *${inc.title}* not acknowledged${responders.length ? ` by ${responders.map(mention).join(' or ')}` : ''} after ${minutes} min — ` +
             `escalating to ${mention(backup)}.`,
           incidentId: inc.id,
         });
@@ -158,13 +220,15 @@ export function makeIncidents({ db, rotation, notify }) {
       // Step 2: backup didn't respond either -> @channel.
       if (inc.escalation_level === 1 && age >= 2 * escalateAfter) { await alertWholeChannel(); continue; }
 
-      // In between: keep re-paging whoever is currently responsible.
+      // In between, and after the @channel: keep re-paging everyone responsible so far.
       if (sincePage >= config.repageEveryMinutes * MINUTE) {
-        (await db.run('UPDATE incidents SET last_paged_at = ? WHERE id = ?', [now.toISOString(), inc.id]));
-        const targets = inc.escalation_level === 0 ? onCallPeople : [...onCallPeople, backup];
-        for (const u of targets.filter(Boolean)) {
+        const targets = (inc.escalation_level === 0 ? responders : [...responders, backup]).filter(Boolean);
+        if (!targets.length || !(await claim(inc.escalation_level))) continue;
+        for (const u of targets) {
           await event(inc.id, `Re-paged ${u.name}`, now);
-          await page(inc, u, `Reminder: still not acknowledged after ${minutes} min.`);
+          await page(inc, u, onCallPeople.length || inc.escalation_level > 0
+            ? `Reminder: still not acknowledged after ${minutes} min.`
+            : `Nobody is on call this weekend and this isn't acknowledged after ${minutes} min. You're an admin — can you take it?`);
         }
       }
     }

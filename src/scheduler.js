@@ -9,13 +9,16 @@ const HOUR = 3_600_000;
 
 export function makeScheduler({ db, shifts, rotation, notify, incidents }) {
   const fmt = (d) => formatLocal(d, config.timezone);
+  // Weekends whose reminder / start / end this process has already handled. Without these, each
+  // job would re-read the database every minute and a serverless database would never sleep.
+  const done = { reminder: new Set(), start: new Set(), end: new Set() };
 
   const names = (people) => people.map((p) => p.name).join(' and ');
 
   async function shiftReminder(now) {
     const next = shifts.next(now);
     const remindAt = next.start.getTime() - config.reminderHoursBefore * HOUR;
-    if (now.getTime() < remindAt || now >= next.start) return;
+    if (now.getTime() < remindAt || now >= next.start || done.reminder.has(next.key)) return;
     const entry = await rotation.forShift(next);
     const when = `${fmt(next.start)} → ${fmt(next.end)}`;
     for (const person of entry.people) {
@@ -34,12 +37,14 @@ export function makeScheduler({ db, shifts, rotation, notify, incidents }) {
           : `:warning: Nobody is on call this weekend (${when}). Add yourself at ${config.publicUrl}/`,
       });
     }
+    done.reminder.add(next.key);
   }
 
   async function shiftStart(now) {
     const current = shifts.current(now);
-    if (!current) return;
+    if (!current || done.start.has(current.key)) return;
     const entry = await rotation.lock(current);
+    done.start.add(current.key);
     if (!(await claimOnce(db, `start:${current.key}`))) return;
     await announceWeekendStart(current, entry);
   }
@@ -62,7 +67,8 @@ export function makeScheduler({ db, shifts, rotation, notify, incidents }) {
     // The most recent weekend that has finished, if it finished within the last few hours.
     const current = shifts.current(now);
     const prev = shifts.previous(current || shifts.next(now));
-    if (now < prev.end || now - prev.end > 6 * HOUR) return;
+    if (now < prev.end || now - prev.end > 6 * HOUR || done.end.has(prev.key)) return;
+    done.end.add(prev.key);
     const ended = await rotation.forShift(prev);
     if (!ended.locked || !(await claimOnce(db, `end:${prev.key}`))) return;
     const nextEntry = await rotation.forShift(shifts.next(now));

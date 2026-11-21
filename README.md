@@ -17,10 +17,10 @@ exactly that, and you can run it for free.
 | | |
 |---|---|
 | **Fair weekend rotation** | Two people per weekend by default (`PEOPLE_PER_WEEKEND`), taking turns so everyone gets the same share. Weekends run Friday 18:00 → Monday 09:00 in your time zone (configurable). |
-| **Self-service** | Anyone can **add themselves** to a weekend (no limit) or **remove themselves**. Weekends below the target are flagged *needs cover*. |
+| **Self-service** | Anyone can **add themselves** to a weekend (no limit) or **remove themselves** before it starts (once it has started, someone takes their spot instead). Weekends below the target are flagged *needs cover*. |
 | **Swap with undo** | On the calendar, **Swap** next to a name takes that person's spot. You get 10 seconds to undo before they and Slack are told. |
 | **Slack paging** | Page from the web app, `/page <what broke>` in Slack, or the HTTP API. Everyone on call gets a DM with **Acknowledge / Resolve** buttons; the channel is told, with on-call people @-tagged. |
-| **Escalation** | No acknowledgement → re-page every 5 min → page the backup at 15 min → `@channel` at 30 min. On weekdays pages go straight to the channel. |
+| **Escalation** | No acknowledgement → re-page every 5 min → page the backup at 15 min → `@channel` at 30 min → keep paging everyone every 5 min until someone acknowledges (automatic paging stops after 24 h). A weekend with nobody on call pages the admins instead. On weekdays pages go to the channel, with a reminder every 30 min. API alerts with the same title as an unresolved incident join it instead of paging again. |
 | **Reminders** | DM 24 hours before your weekend, a "you're on call now" DM when it starts, and a hand-off summary in the channel when it ends. |
 | **Calendar** | Month view of who's on call, plus a feed you can subscribe to from Google Calendar. |
 | **Audit log** | Every add, remove and swap, grouped by day, visible to the whole team. |
@@ -105,7 +105,7 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 
 ## How the rotation works
 
-- The order is the **Team** page list; admins can reorder people, change roles or remove someone.
+- The order is the **Team** page list; admins can reorder people, change roles or remove someone. Removing someone also signs them out and blocks sign-in until they're added back.
 - Each weekend takes the next two engineers in order, so over a full cycle everyone gets the same number of weekends. The **Balance** box on the home page shows the counts.
 - When a weekend starts, its picks are saved. Future weekends are projected from the last saved one, so people joining, leaving or being reordered never reshuffle past weekends.
 - Adding yourself, removing yourself or swapping only changes that one weekend.

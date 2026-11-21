@@ -18,7 +18,7 @@ before(async () => {
     db,
     notifierOverrides: {
       slack: async (to, text) => { sent.push({ ch: 'slack', to, text }); },
-      whatsapp: async (to, text) => { sent.push({ ch: 'whatsapp', to, text }); },
+      whatsapp: async (to, text, template) => { sent.push({ ch: 'whatsapp', to, text, template }); },
     },
   });
   await new Promise((r) => app.server.listen(0, r));
@@ -101,6 +101,25 @@ test('non-technical people can view the calendar and audit log and trigger an al
   await app.db.run("UPDATE users SET role = 'non_technical' WHERE id = ?", [benId]);
 });
 
+test('removing a teammate signs them out everywhere and blocks sign-in until they are added back', async () => {
+  const admin = cookieOf(await post('/login', form({ email: 'ana@example.com', password: 'longenough123' })));
+  const benCookie = cookieOf(await post('/login', form({ email: 'ben@example.com', password: 'longenough123' })));
+  assert.equal((await fetch(base + '/calendar', { headers: { cookie: benCookie }, redirect: 'manual' })).status, 200);
+  const ben = await app.db.get("SELECT id FROM users WHERE email = 'ben@example.com'");
+
+  let res = await post(`/team/${ben.id}/active`, form({ active: '0' }), { cookie: admin });
+  assert.equal(res.status, 303);
+  res = await fetch(base + '/calendar', { headers: { cookie: benCookie }, redirect: 'manual' });
+  assert.equal(res.status, 303, 'the old session no longer works');
+  assert.equal(res.headers.get('location'), '/login');
+  res = await post('/login', form({ email: 'ben@example.com', password: 'longenough123' }));
+  assert.equal(res.status, 403);
+  assert.match(await res.text(), /removed/);
+
+  await post(`/team/${ben.id}/active`, form({ active: '1' }), { cookie: admin });
+  assert.equal((await fetch(base + '/calendar', { headers: { cookie: benCookie }, redirect: 'manual' })).status, 200, 'back in once re-added');
+});
+
 test('login rejects a wrong password and accepts the right one', async () => {
   let res = await post('/login', form({ email: 'ana@example.com', password: 'nope' }));
   assert.equal(res.status, 400);
@@ -140,6 +159,17 @@ test('alerts API needs the bearer token and creates an incident', async () => {
   const json = await res.json();
   assert.ok(json.id);
   assert.equal((await app.incidents.get(json.id)).title, 'API 5xx spike');
+
+  // A monitor that fires every minute keeps adding to the same open incident.
+  res = await fetch(base + '/api/incidents', {
+    method: 'POST',
+    body: JSON.stringify({ title: 'API 5xx spike' }),
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-api-token' },
+  });
+  assert.equal(res.status, 200);
+  const again = await res.json();
+  assert.equal(again.id, json.id);
+  assert.equal(again.repeat, true);
 });
 
 test('Slack requests from another workspace are rejected when SLACK_TEAM_ID is set', async () => {

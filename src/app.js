@@ -65,6 +65,8 @@ export function createApp({ db, notifierOverrides } = {}) {
     try { return JSON.parse(raw); } catch { return null; }
   }
 
+  const REMOVED = "You've been removed from the on-call rotation, so you can't sign in. Ask an admin to add you back.";
+
   function requireUser(ctx) {
     if (!ctx.user) {
       ctx.r.redirect('/login'); // /login sends you on to /signup when nobody has signed up yet
@@ -187,6 +189,7 @@ export function createApp({ db, notifierOverrides } = {}) {
       return fail('Wrong email or password.');
     }
     failures.delete(key);
+    if (!user.active) return ctx.r.html(authView('login', { values: { email }, error: REMOVED }), 403);
     ctx.r.cookie(sessionCookie(user.id));
     ctx.r.redirect('/');
   });
@@ -221,6 +224,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     }
     const existing = await userByEmail(identity.email);
     if (existing) {
+      if (!existing.active) throw new HttpError(403, REMOVED);
       ctx.r.cookie(sessionCookie(existing.id));
       return ctx.r.redirect('/');
     }
@@ -261,7 +265,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     const onCall = await rotation.onCallNow(now);
     const schedule = await rotation.schedule(shifts.currentOrNext(now), 12);
     ctx.r.html(views.dashboardPage({
-      user: ctx.user, now, onCall: onCall?.people.length ? onCall : null,
+      user: ctx.user, now, onCall: onCall?.people.length ? onCall : null, runningShift: onCall?.shift ?? null,
       nextEntry: onCall ? null : schedule[0],
       backup: onCall?.people.length ? await rotation.backupFor(onCall.shift) : null,
       schedule,
@@ -302,6 +306,8 @@ export function createApp({ db, notifierOverrides } = {}) {
   router.post('/weekends/:key/join', (ctx) => rosterChange(ctx, 'join'));
   router.post('/weekends/:key/leave', (ctx) => rosterChange(ctx, 'leave'));
 
+  let checkSwapsUntil = null; // see announceMissedSwaps
+
   // "Take their spot": you're in, they're out. Undoable by you for 10 seconds; Slack and the
   // replaced person hear about it only after that window passes (see announceSwaps).
   router.post('/weekends/:key/swap', async (ctx) => {
@@ -318,6 +324,7 @@ export function createApp({ db, notifierOverrides } = {}) {
       throw new HttpError(err.status || 500, err.message);
     }
     setTimeout(() => announceSwaps().catch((err) => console.error('announce swaps failed:', err)), rotation.UNDO_MS + 2_500).unref?.();
+    checkSwapsUntil = Date.now() + 2 * 60_000; // and the scheduler double-checks for a couple of minutes
     setFlash(ctx.r, 'ok', `You took ${replaced.name}'s spot for ${formatRange(shift, config.timezone)}.`,
       { undo: { id: row.id, until: new Date(row.at).getTime() + rotation.UNDO_MS } });
     ctx.r.redirect(`/calendar?month=${ctx.params.key.slice(0, 7)}`);
@@ -624,8 +631,11 @@ export function createApp({ db, notifierOverrides } = {}) {
 
   router.post('/api/incidents', async (ctx) => {
     requireApiToken(ctx);
-    const inc = await incidents.create({ title: ctx.body.title, details: ctx.body.details, source: String(ctx.body.source || 'api').slice(0, 30) });
-    ctx.r.json({ id: inc.id, status: inc.status, paged: (await rotation.userById(inc.assigned_user_id))?.name ?? null, url: `${config.publicUrl}/incidents/${inc.id}` }, 201);
+    const inc = await incidents.create({ title: ctx.body.title, details: ctx.body.details, source: String(ctx.body.source || 'api').slice(0, 30), dedupe: true });
+    ctx.r.json({
+      id: inc.id, status: inc.status, paged: (await rotation.userById(inc.assigned_user_id))?.name ?? null,
+      url: `${config.publicUrl}/incidents/${inc.id}`, ...(inc.repeat ? { repeat: true } : {}),
+    }, inc.repeat ? 200 : 201);
   });
 
   router.get('/api/oncall', async (ctx) => {
@@ -657,7 +667,9 @@ export function createApp({ db, notifierOverrides } = {}) {
         ctx.body = parseBody(ctx.raw, req.headers['content-type']);
       }
       const uid = sessionUserId(req.headers.cookie);
-      ctx.user = uid ? (await rotation.userById(uid)) ?? null : null;
+      // Sessions are stateless cookies, so a removed teammate is shut out by checking on every request.
+      const sessionUser = uid ? await rotation.userById(uid) : null;
+      ctx.user = sessionUser?.active ? sessionUser : null;
       await found.handler(ctx);
     } catch (err) {
       const status = err.status || 500;
@@ -669,6 +681,12 @@ export function createApp({ db, notifierOverrides } = {}) {
   }
 
   const server = http.createServer(handle);
-  scheduler.addStep?.(announceSwaps);
+  // Each swap announces itself after its undo window (see the swap route). The scheduler only
+  // catches what a restart or a missed timer left behind: once at startup and for a couple of
+  // minutes after each swap, and otherwise it leaves the database alone.
+  scheduler.addStep?.(async function announceMissedSwaps(now) {
+    checkSwapsUntil ??= now.getTime();
+    if (now.getTime() <= checkSwapsUntil) await announceSwaps(now);
+  });
   return { server, scheduler, rotation, announceSwaps, incidents, shifts, relinkSlackUsers, db };
 }
