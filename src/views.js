@@ -1,6 +1,7 @@
 // Server-rendered HTML. Every interpolated value goes through esc().
 import { config } from './config.js';
 import { formatLocal, formatRange } from './time.js';
+import { describeDays, DAY_NAMES, PRESETS } from './settings.js';
 import { ROLES, ROLE_LABELS, isAdmin, isResponder } from './roles.js';
 
 export const esc = (v) => String(v ?? '')
@@ -193,15 +194,15 @@ function selfButton(user, e, back = '', now = new Date()) {
     : `<form method="post" action="/weekends/${e.shift.key}/join" class="inline">${hidden}<button class="sm primary">Add me</button></form>`;
 }
 
-function peopleCell(e, perWeekend) {
+function peopleCell(e) {
   const chips = e.people.map((p) => `<span class="row" style="gap:6px"><span class="avatar" style="width:26px;height:26px;font-size:11px">${initials(p.name)}</span>${esc(p.name)}${
     e.joined.includes(p.id) ? ' <span class="pill">added themselves</span>' : ''}</span>`).join('');
   const cover = e.needsCover
-    ? ` <span class="pill open">needs ${perWeekend - e.people.length} more</span>` : '';
+    ? ` <span class="pill open">needs ${e.shift.count - e.people.length} more</span>` : '';
   return `<div class="row" style="gap:12px">${chips || '<span class="muted">Nobody yet</span>'}${cover}</div>`;
 }
 
-export function dashboardPage({ user, now, onCall, runningShift, nextEntry, backup, schedule, perWeekend, balance, recentLog, openIncidents, flash }) {
+export function dashboardPage({ user, now, onCall, runningShift, nextEntry, backup, schedule, coverage, balance, recentLog, openIncidents, flash }) {
   const tz = config.timezone;
   const hero = onCall
     ? `<div class="hero"><div class="avatar">📟</div><div>
@@ -221,7 +222,7 @@ export function dashboardPage({ user, now, onCall, runningShift, nextEntry, back
     const isNow = onCall && e.shift.key === onCall.shift.key;
     return `<tr class="${isNow ? 'now' : ''}">
       <td><strong>${esc(formatRange(e.shift, tz))}</strong><div class="small muted">${esc(fmt(e.shift.start))} → ${esc(fmt(e.shift.end))}</div></td>
-      <td>${peopleCell(e, perWeekend)}</td>
+      <td>${peopleCell(e)}</td>
       <td style="text-align:right">${selfButton(user, e, '', now)}${isNow ? ' <span class="pill open">now</span>' : ''}</td>
     </tr>`;
   }).join('');
@@ -245,7 +246,7 @@ export function dashboardPage({ user, now, onCall, runningShift, nextEntry, back
   </div>
   <div class="card"><h2>Open incidents</h2>${incidents}</div>
   <div class="card"><h2>Weekend rotation</h2>
-    <p class="small muted">Each weekend (${esc(dayTime(config.shiftStart))} → ${esc(dayTime(config.shiftEnd))}, ${esc(tz)}) gets ${perWeekend} people from the rotation, in turn, so everyone gets the same share. Admins are optional.
+    <p class="small muted">Each shift (${esc(describeDays(coverage.days))}, ${esc(coverage.start)} → ${esc(coverage.end)}, ${esc(tz)}) gets ${coverage.weekendCount === coverage.weekdayCount ? coverage.weekendCount : `${coverage.weekendCount} on weekend days and ${coverage.weekdayCount} on weekdays`} people from the rotation, in turn, so everyone gets the same share. Admins are optional.
     Anyone can <strong>add themselves</strong> to any weekend, with no limit, and <strong>remove themselves</strong> from one of theirs. You can only change your own spot. Every change goes into the <a href="/log">public log</a>.</p>
     <div class="scroll"><table><thead><tr><th>Weekend</th><th>On call</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>
   <div class="grid">
@@ -305,12 +306,6 @@ function pageForm() {
         <textarea name="details" maxlength="4000" placeholder="Details, links, dashboards (optional)" style="margin-top:8px"></textarea>
         <p style="margin:10px 0 0"><button class="primary">🚨 Page now</button></p>
       </form>`;
-}
-
-function dayTime({ day, hour, minute }) {
-  const d = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][day];
-  const h = hour % 12 || 12;
-  return `${d} ${h}:${String(minute).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`;
 }
 
 function incidentButtons(user, inc, back = '') {
@@ -400,15 +395,49 @@ export function teamPage({ user, members, inactive, role = '', flash }) {
   return layout({ title: 'Team', user, body, flash, active: 'team' });
 }
 
-export function settingsPage({ user, status, notifications, flash }) {
+export function settingsPage({ user, coverage, domains, status, notifications, flash }) {
+  const admin = isAdmin(user);
   const yes = (ok, label) => `<span class="pill ${ok ? 'sent' : 'dry-run'}">${ok ? 'connected' : label}</span>`;
   const url = (p) => `<code>${esc(config.publicUrl + p)}</code>`;
-  const resend = user.is_admin
+  const resend = admin
     ? `<div class="card"><h2>Weekend messages</h2>
         <p class="small muted">Re-send this weekend's "you're on call now" message to everyone on call, and post it in the on-call channel again. Useful if Slack was connected after the weekend started.</p>
         <form method="post" action="/admin/resend-weekend-start" class="inline"><button class="sm">Re-send this weekend's on-call messages</button></form></div>`
     : '';
+  const dayBoxes = DAY_NAMES.map((name, d) =>
+    `<label style="display:inline-flex;gap:6px;align-items:center;margin:0 14px 8px 0;font-weight:500"><input type="checkbox" name="day_${d}" value="1" ${coverage.days.includes(d) ? 'checked' : ''} style="width:auto"> ${name}</label>`).join('');
+  const presetButtons = Object.entries(PRESETS).map(([key, p]) => `<button name="preset" value="${key}" class="sm">${esc(p.label)}</button>`).join(' ');
+  const coverageCard = admin
+    ? `<div class="card"><h2>On-call coverage</h2>
+        <p class="small muted">Which days need someone on call. Consecutive days form one shift: it starts at the start time on its first day and ends at the end time the morning after its last day. Changes apply to the calendar and rotation right away.</p>
+        <form method="post" action="/settings/coverage">
+          <div style="margin-top:8px">${dayBoxes}</div>
+          <div class="row">
+            <div><label for="start">Shift starts</label><input id="start" name="start" type="time" required value="${esc(coverage.start)}"></div>
+            <div><label for="end">Shift ends</label><input id="end" name="end" type="time" required value="${esc(coverage.end)}"></div>
+            <div><label for="weekend_count">People on weekend days</label><input id="weekend_count" name="weekend_count" type="number" min="1" max="10" required value="${coverage.weekendCount}"></div>
+            <div><label for="weekday_count">People on weekdays</label><input id="weekday_count" name="weekday_count" type="number" min="1" max="10" required value="${coverage.weekdayCount}"></div>
+          </div>
+          <p class="hint">A shift needs as many people as the busiest day it covers. Set both to the same number for "same all week".</p>
+          <p style="margin:12px 0 0"><button class="primary">Save coverage</button></p>
+          <p class="small muted" style="margin:14px 0 6px">Or start from a preset (keeps the times and counts above):</p>
+          <p style="margin:0">${presetButtons}</p>
+        </form></div>`
+    : `<div class="card"><h2>On-call coverage</h2>
+        <p class="small">${esc(describeDays(coverage.days))}, ${esc(coverage.start)} → ${esc(coverage.end)}. ${coverage.weekendCount} on weekend days, ${coverage.weekdayCount} on weekdays.</p>
+        <p class="small muted">Ask an admin to change it.</p></div>`;
+  const domainsCard = admin
+    ? `<div class="card"><h2>Workspace</h2>
+        <p class="small muted">Only Google Workspace accounts on these email domains can sign in. Separate several with commas.</p>
+        <form method="post" action="/settings/domains">
+          <label for="domains">Allowed email domains</label>
+          <input id="domains" name="domains" required value="${esc(domains.map((d) => `@${d}`).join(', '))}" placeholder="@example.com">
+          <p class="hint">Your own domain must stay in the list. People already signed in stay signed in.</p>
+          <p style="margin:12px 0 0"><button class="primary">Save domains</button></p>
+        </form></div>`
+    : `<div class="card"><h2>Workspace</h2><p class="small">${domains.length ? domains.map((d) => `@${esc(d)}`).join(', ') : 'Not restricted (local development)'}</p></div>`;
   const body = `<h1>Settings</h1>
+  <div class="grid">${coverageCard}${domainsCard}</div>
   <div class="grid">
     <div class="card"><h2>Slack ${yes(status.slack, 'dry-run')}</h2>
       <p class="small">On-call channel: ${config.slack.channel ? `<code>${esc(config.slack.channel)}</code>` : '<span class="muted">not set</span>'}</p>
@@ -445,25 +474,25 @@ function personAction(user, e, p) {
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const hue = (id) => (Number(id) * 137) % 360;
 
-export function calendarPage({ user, grid, prevMonth, nextMonth, thisMonth, feedUrl, perWeekend, flash }) {
+export function calendarPage({ user, grid, prevMonth, nextMonth, thisMonth, feedUrl, flash }) {
   const tz = config.timezone;
   const dows = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => `<div class="dow">${d}</div>`).join('');
   const timeOf = (d) => new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }).format(d);
-  const cells = grid.weeks.flat().map((d) => {
-    const e = d.entry;
-    const when = !e ? '' : d.isStart ? `<small>from ${esc(timeOf(e.shift.start))}</small>` : d.isEnd ? `<small>until ${esc(timeOf(e.shift.end))}</small>` : '';
-    const chip = !e ? '' : e.people.length
+  const chipsFor = ({ entry: e, isStart, isEnd }) => {
+    const when = isStart ? `<small>from ${esc(timeOf(e.shift.start))}</small>` : isEnd ? `<small>until ${esc(timeOf(e.shift.end))}</small>` : '';
+    return e.people.length
       ? e.people.map((p, i) => `<span class="oc" style="--h:${hue(p.id)}" title="${esc(p.name)} on call">${esc(p.name)}${i === e.people.length - 1 ? when : ''}</span>`).join('')
         + (e.needsCover ? '<span class="oc need">needs cover</span>' : '')
       : `<span class="oc need">needs cover${when}</span>`;
-    return `<div class="${d.inMonth ? '' : 'out'} ${d.today ? 'today' : ''}"><span class="num">${d.day}</span>${chip}</div>`;
-  }).join('');
+  };
+  const cells = grid.weeks.flat().map((d) =>
+    `<div class="${d.inMonth ? '' : 'out'} ${d.today ? 'today' : ''}"><span class="num">${d.day}</span>${d.items.map(chipsFor).join('')}</div>`).join('');
 
   const list = grid.entries.length
     ? `<table>${grid.entries.map((e) => `<tr>
         <td><strong>${esc(formatRange(e.shift, tz))}</strong><div class="small muted">${esc(fmt(e.shift.start))} → ${esc(fmt(e.shift.end))}</div></td>
         <td>${e.people.map((p) => `<div class="row" style="gap:8px;margin:3px 0"><span><span class="swatch" style="--h:${hue(p.id)}"></span>${esc(p.name)}</span>${personAction(user, e, p)}</div>`).join('') || '<span class="muted">nobody</span>'}
-          ${e.needsCover ? `<span class="pill open">needs ${perWeekend - e.people.length} more</span>` : ''}</td>
+          ${e.needsCover ? `<span class="pill open">needs ${e.shift.count - e.people.length} more</span>` : ''}</td>
         <td style="text-align:right">${e.people.some((p) => p.id === user.id) ? '' : selfButton(user, e, 'calendar')}</td></tr>`).join('')}</table>`
     : '<p class="muted">No weekends scheduled this month yet.</p>';
 

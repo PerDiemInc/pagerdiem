@@ -5,6 +5,7 @@ import { createApp } from './app.js';
 const db = await openDb(config.database);
 console.log(`  Database: ${db.dialect === 'pg' ? 'Postgres' : config.database}`);
 const app = createApp({ db });
+await app.loadSettings();
 
 app.relinkSlackUsers().catch((err) => console.error('Slack relink failed:', err.message));
 app.scheduler.start();

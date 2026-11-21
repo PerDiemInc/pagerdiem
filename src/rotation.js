@@ -1,6 +1,6 @@
 // Who is on call each weekend.
 //
-// - The rotation assigns PER_WEEKEND people (default 2) to every weekend, walking the
+// - The rotation assigns the shift's people (the coverage setting, default 2) to every shift, walking the
 //   team in `rotation_order` so everyone gets the same share. Admins are not assigned
 //   automatically; they can add themselves to any weekend. Non-technical people (C-level,
 //   support, product) are never on call.
@@ -12,7 +12,7 @@
 
 import { isResponder } from './roles.js';
 
-export function makeRotation(db, shifts, { perWeekend = 2 } = {}) {
+export function makeRotation(db, shifts) {
   const activeMembers = () => db.all('SELECT * FROM users WHERE active = 1 ORDER BY rotation_order, id');
   /** People the rotation assigns automatically: active engineers (admins are optional, non-technical never). */
   const rotationMembers = () =>
@@ -84,7 +84,7 @@ export function makeRotation(db, shifts, { perWeekend = 2 } = {}) {
       cursor = shifts.forKey(startKey);
     }
     for (let guard = 0; cursor.key < fromShift.key && guard < 520; guard++) {
-      const picked = takeAfter(prev, members, perWeekend);
+      const picked = takeAfter(prev, members, cursor.count);
       prev = picked[picked.length - 1] ?? prev;
       cursor = shifts.following(cursor);
     }
@@ -95,7 +95,7 @@ export function makeRotation(db, shifts, { perWeekend = 2 } = {}) {
       const frozen = (await frozenBase(shift.key)).map((r) => r.user_id);
       // Weekends before the rotation began have no automatic picks (only people who added themselves).
       const beforeStart = !frozen.length && shift.key < startKey;
-      const base = frozen.length ? await usersByIds(frozen) : beforeStart ? [] : takeAfter(prev, members, perWeekend);
+      const base = frozen.length ? await usersByIds(frozen) : beforeStart ? [] : takeAfter(prev, members, shift.count);
       if (base.length) prev = base[base.length - 1];
 
       const changes = await changesFor(shift.key);
@@ -107,7 +107,7 @@ export function makeRotation(db, shifts, { perWeekend = 2 } = {}) {
         const u = await userById(id);
         if (u?.active && isResponder(u)) people.push(u);
       }
-      out.push({ shift, base, people, joined, left, locked: frozen.length > 0, needsCover: people.length < perWeekend });
+      out.push({ shift, base, people, joined, left, locked: frozen.length > 0, needsCover: people.length < shift.count });
       shift = shifts.following(shift);
     }
     return out;
@@ -271,7 +271,7 @@ export function makeRotation(db, shifts, { perWeekend = 2 } = {}) {
   }
 
   return {
-    perWeekend, activeMembers, rotationMembers, userById, schedule, rotationStartKey, forShift, lock, onCallNow,
+    activeMembers, rotationMembers, userById, schedule, rotationStartKey, forShift, lock, onCallNow,
     backupFor, join, leave, swap, undoSwap, claimSwapsToAnnounce, UNDO_MS, log, balance, move, nextRotationOrder,
   };
 }

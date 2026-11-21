@@ -62,35 +62,87 @@ export function parseKey(key) {
   return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
 }
 
+const weekdayOf = ({ year, month, day }) => new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+const parseHm = (hm) => { const [hour, minute] = String(hm).split(':').map(Number); return { hour, minute }; };
+
+/** Runs of consecutive covered days, each starting on `startDay`. Covering all 7 days is one weekly run. */
+export function runsOf(days) {
+  const set = new Set(days);
+  if (set.size === 7) return [{ startDay: 1, length: 7 }];
+  const runs = [];
+  for (const d of [...set].sort((a, b) => a - b)) {
+    if (set.has((d + 6) % 7)) continue;
+    let length = 1;
+    while (set.has((d + length) % 7)) length += 1;
+    runs.push({ startDay: d, length });
+  }
+  return runs;
+}
+
 /**
- * Build shift helpers for a weekly shift defined by start/end day+time in a time zone.
- * startSpec/endSpec look like { day: 5, hour: 18, minute: 0 } (0 = Sunday).
+ * The coverage the env settings describe: SHIFT_START/SHIFT_END become the run of days they span
+ * (FRI 18:00 -> MON 09:00 covers Fri, Sat and Sun), and PEOPLE_PER_WEEKEND the people per shift.
  */
-export function makeShifts({ timezone, shiftStart, shiftEnd }) {
-  // How many calendar days after the start day the shift ends.
-  let endOffsetDays = (shiftEnd.day - shiftStart.day + 7) % 7;
-  const startMinutes = shiftStart.hour * 60 + shiftStart.minute;
-  const endMinutes = shiftEnd.hour * 60 + shiftEnd.minute;
-  if (endOffsetDays === 0 && endMinutes <= startMinutes) endOffsetDays = 7;
+export function coverageFromConfig({ shiftStart, shiftEnd, perWeekend = 2 }) {
+  const length = (shiftEnd.day - shiftStart.day + 7) % 7 || 7;
+  const days = Array.from({ length }, (_, i) => (shiftStart.day + i) % 7);
+  const hm = ({ hour, minute }) => `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  return { days, start: hm(shiftStart), end: hm(shiftEnd), weekendCount: perWeekend, weekdayCount: perWeekend };
+}
+
+const isWeekendDay = (d) => d === 0 || d === 6;
+
+/**
+ * Shift helpers for a coverage: which days of the week need people on call, the time the shift
+ * starts on its first day and ends the morning after its last day, and how many people each
+ * kind of day needs. Consecutive covered days make one shift; a shift needs as many people as the
+ * busiest day it covers. `setCoverage` changes it while the app runs.
+ */
+export function makeShifts(config) {
+  const { timezone } = config;
+  let coverage;
+  let runs;
+  let startDays;
+  let start;
+  let end;
+
+  function setCoverage(next) {
+    coverage = { ...next, days: [...new Set(next.days)].sort((a, b) => a - b) };
+    runs = runsOf(coverage.days);
+    startDays = new Set(runs.map((r) => r.startDay));
+    start = parseHm(coverage.start);
+    end = coverage.days.length === 7 ? start : parseHm(coverage.end);
+  }
+  setCoverage(config.coverage ?? coverageFromConfig(config));
+
+  const countFor = (days) => Math.max(...days.map((d) => (isWeekendDay(d) ? coverage.weekendCount : coverage.weekdayCount)));
 
   /** The shift whose start falls on local date `key`. */
   function forKey(key) {
     const startDate = parseKey(key);
-    const endDate = addDays(startDate, endOffsetDays);
+    const weekday = weekdayOf(startDate);
+    const run = runs.find((r) => r.startDay === weekday)
+      ?? runs.find((r) => Array.from({ length: r.length }, (_, i) => (r.startDay + i) % 7).includes(weekday))
+      ?? { startDay: weekday, length: 1 };
+    const days = Array.from({ length: run.length }, (_, i) => (weekday + i) % 7);
     return {
       key,
-      start: zonedToUtc({ ...startDate, hour: shiftStart.hour, minute: shiftStart.minute }, timezone),
-      end: zonedToUtc({ ...endDate, hour: shiftEnd.hour, minute: shiftEnd.minute }, timezone),
+      start: zonedToUtc({ ...startDate, hour: start.hour, minute: start.minute }, timezone),
+      end: zonedToUtc({ ...addDays(startDate, run.length), hour: end.hour, minute: end.minute }, timezone),
+      count: countFor(days),
     };
   }
 
   /** The most recent shift that started at or before `now` (it may already be over). */
   function latestStarted(now) {
     const local = tzParts(now, timezone);
-    const daysBack = (local.weekday - shiftStart.day + 7) % 7;
-    let shift = forKey(dateKey(addDays(local, -daysBack)));
-    if (shift.start > now) shift = forKey(dateKey(addDays(local, -daysBack - 7)));
-    return shift;
+    for (let back = 0; back <= 8; back++) {
+      const date = addDays(local, -back);
+      if (!startDays.has(weekdayOf(date))) continue;
+      const shift = forKey(dateKey(date));
+      if (shift.start <= now) return shift;
+    }
+    throw new Error('No on-call days are configured');
   }
 
   /** The shift in progress at `now`, or null between shifts. */
@@ -99,19 +151,28 @@ export function makeShifts({ timezone, shiftStart, shiftEnd }) {
     return now < shift.end ? shift : null;
   }
 
+  function scan(shift, step) {
+    const from = parseKey(shift.key);
+    for (let i = 1; i <= 8; i++) {
+      const date = addDays(from, step * i);
+      if (startDays.has(weekdayOf(date))) return forKey(dateKey(date));
+    }
+    throw new Error('No on-call days are configured');
+  }
+
   /** The next shift that has not started yet. */
   function next(now = new Date()) {
     return following(latestStarted(now));
   }
 
-  /** The shift one week after `shift`. */
+  /** The shift after `shift`. */
   function following(shift) {
-    return forKey(dateKey(addDays(parseKey(shift.key), 7)));
+    return scan(shift, 1);
   }
 
-  /** The shift one week before `shift`. */
+  /** The shift before `shift`. */
   function previous(shift) {
-    return forKey(dateKey(addDays(parseKey(shift.key), -7)));
+    return scan(shift, -1);
   }
 
   /** The current shift if one is running, otherwise the next one. */
@@ -119,7 +180,7 @@ export function makeShifts({ timezone, shiftStart, shiftEnd }) {
     return current(now) || next(now);
   }
 
-  return { forKey, current, next, following, previous, currentOrNext };
+  return { forKey, current, next, following, previous, currentOrNext, setCoverage, coverage: () => coverage };
 }
 
 const displayFormatters = new Map();

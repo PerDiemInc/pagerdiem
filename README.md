@@ -20,7 +20,7 @@ exactly that, and you can run it for free.
 
 | | |
 |---|---|
-| **Fair weekend rotation** | Two people per weekend by default (`PEOPLE_PER_WEEKEND`), taking turns so everyone gets the same share. Weekends run Friday 18:00 → Monday 09:00 in your time zone (configurable). |
+| **Fair rotation, your days** | People take turns so everyone gets the same share. By default two people cover the weekend, Friday 18:00 → Monday 09:00 in your time zone. An admin can change the days that need cover, the start and end time, and how many people go on weekend days and on weekdays, from **Settings** (presets: weekends, weekdays, all week). |
 | **Self-service** | Anyone can **add themselves** to a weekend (no limit) or **remove themselves** before it starts (once it has started, someone takes their spot instead). Weekends below the target are flagged *needs cover*. |
 | **Swap with undo** | On the calendar, **Swap** next to a name takes that person's spot. You get 10 seconds to undo before they and Slack are told. |
 | **Slack paging** | Page from the web app, `/page <what broke>` in Slack, or the HTTP API. Everyone on call gets a DM with **Acknowledge / Resolve** buttons; the channel is told, with on-call people @-tagged. |
@@ -75,13 +75,13 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 
 | Variable | Required | Description |
 |---|---|---|
-| `ALLOWED_EMAIL_DOMAINS` | production | Your Google Workspace email domain(s), comma-separated, e.g. `example.com` |
+| `ALLOWED_EMAIL_DOMAINS` | production | Your Google Workspace email domain(s), comma-separated, e.g. `example.com`. An admin can change them later in **Settings → Workspace**. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | production | Google OAuth client (Web application). Without them, production lets nobody in. |
 | `DATABASE_URL` | production | Postgres connection string. Without it, a local SQLite file is used. |
 | `SESSION_SECRET` | production | Long random string (signs sessions and the calendar feed link) |
 | `PUBLIC_URL` | | The app's public URL. Set automatically on Render. |
 | `TEAM_NAME`, `APP_NAME` | | Shown on the sign-in page and calendar feed |
-| `TEAM_TIMEZONE`, `SHIFT_START`, `SHIFT_END` | | Defaults: `America/New_York`, `FRI 18:00`, `MON 09:00` |
+| `TEAM_TIMEZONE`, `SHIFT_START`, `SHIFT_END` | | Defaults: `America/New_York`, `FRI 18:00`, `MON 09:00`. These, and `PEOPLE_PER_WEEKEND`, are only the starting coverage: once an admin saves **Settings → On-call coverage**, the saved days, times and counts win. |
 | `PEOPLE_PER_WEEKEND` | | Default `2` |
 | `REMINDER_HOURS_BEFORE`, `REPAGE_EVERY_MINUTES`, `ESCALATE_AFTER_MINUTES` | | Defaults `24`, `5`, `15` |
 | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` | for Slack | From your Slack app |

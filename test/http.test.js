@@ -8,6 +8,7 @@ process.env.ALLOWED_EMAIL_DOMAINS = 'example.com';
 
 const { freshDb } = await import('./helpers.js');
 const { createApp } = await import('../src/app.js');
+const { config } = await import('../src/config.js');
 
 let app, base;
 const sent = [];
@@ -167,6 +168,62 @@ test('hardening: bad URLs and cookies, redirects, cross-site posts, Slack guests
   const renamed = (await app.db.get('SELECT name FROM users WHERE id = ?', [anaRow.id])).name;
   assert.doesNotMatch(renamed, /[\r\n<>]/);
   await app.db.run("UPDATE users SET name = 'Ana Admin' WHERE id = ?", [anaRow.id]);
+});
+
+test('admins set the on-call days, counts and sign-in domains from Settings', async () => {
+  const login = async (email) => cookieOf(await post('/login', form({ email, password: 'longenough123' })));
+  const ana = await login('ana@example.com');
+  const ben = await login('ben@example.com');
+  const benId = (await app.db.get("SELECT id FROM users WHERE email = 'ben@example.com'")).id;
+  await app.db.run("UPDATE users SET role = 'engineer' WHERE id = ?", [benId]);
+  const originalCoverage = app.shifts.coverage();
+  const originalDomains = [...config.allowedEmailDomains];
+  const get = (path, cookie) => fetch(base + path, { redirect: 'manual', headers: { cookie } });
+  try {
+    const page = await (await get('/settings', ana)).text();
+    assert.match(page, /On-call coverage/);
+    assert.match(page, /name="weekend_count"/);
+    assert.match(page, /name="domains"/);
+    const readOnly = await (await get('/settings', ben)).text();
+    assert.doesNotMatch(readOnly, /name="weekend_count"/, 'engineers see the coverage but cannot edit it');
+    assert.match(readOnly, /Ask an admin to change it/);
+
+    const attempt = { start: '18:00', end: '09:00', weekend_count: '2', weekday_count: '3', day_1: '1', day_2: '1', day_3: '1' };
+    assert.equal((await post('/settings/coverage', form(attempt), { cookie: ben })).status, 403);
+    assert.equal((await post('/settings/domains', form({ domains: '@example.com' }), { cookie: ben })).status, 403);
+
+    assert.equal((await post('/settings/coverage', form({ ...attempt, weekday_count: '0' }), { cookie: ana })).status, 303);
+    assert.deepEqual(app.shifts.coverage().days, originalCoverage.days, 'invalid counts change nothing');
+    assert.equal((await post('/settings/coverage', form({ start: '18:00', end: '09:00', weekend_count: '2', weekday_count: '2' }), { cookie: ana })).status, 303);
+    assert.deepEqual(app.shifts.coverage().days, originalCoverage.days, 'no days ticked changes nothing');
+
+    await post('/settings/coverage', form(attempt), { cookie: ana });
+    assert.deepEqual(app.shifts.coverage().days, [1, 2, 3]);
+    assert.equal(app.shifts.coverage().weekdayCount, 3);
+    assert.equal(JSON.parse((await app.db.get("SELECT value FROM settings WHERE key = 'coverage'")).value).weekdayCount, 3);
+
+    await post('/settings/coverage', form({ ...attempt, preset: 'all' }), { cookie: ana });
+    assert.deepEqual(app.shifts.coverage().days, [0, 1, 2, 3, 4, 5, 6], 'a preset replaces the ticked days');
+
+    let res = await post('/settings/domains', form({ domains: '@other.org' }), { cookie: ana });
+    assert.equal(res.status, 303);
+    assert.deepEqual(config.allowedEmailDomains, originalDomains, 'an admin cannot lock themselves out');
+    await post('/settings/domains', form({ domains: 'not a domain' }), { cookie: ana });
+    assert.deepEqual(config.allowedEmailDomains, originalDomains);
+    await post('/settings/domains', form({ domains: '@Example.com, other.org' }), { cookie: ana });
+    assert.deepEqual(config.allowedEmailDomains, ['example.com', 'other.org']);
+
+    app.shifts.setCoverage(originalCoverage);
+    config.allowedEmailDomains = originalDomains;
+    await app.loadSettings();
+    assert.deepEqual(app.shifts.coverage().days, [0, 1, 2, 3, 4, 5, 6], 'saved coverage is loaded at startup');
+    assert.deepEqual(config.allowedEmailDomains, ['example.com', 'other.org'], 'saved domains are loaded at startup');
+  } finally {
+    app.shifts.setCoverage(originalCoverage);
+    config.allowedEmailDomains = originalDomains;
+    await app.db.run("DELETE FROM settings WHERE key IN ('coverage', 'allowed_domains')");
+    await app.db.run("UPDATE users SET role = 'non_technical' WHERE id = ?", [benId]);
+  }
 });
 
 test('login rejects a wrong password and accepts the right one', async () => {
