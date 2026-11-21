@@ -526,11 +526,12 @@ export function createApp({ db, notifierOverrides } = {}) {
       text: ':white_check_mark: PagerDiem test — this is how on-call pages will reach you on Slack.',
       whatsappText: '✅ PagerDiem test — this is how on-call pages will reach you on WhatsApp.',
     });
-    const failed = results.filter((x) => !x.ok).length;
-    const dry = results.some((x) => x.dryRun);
-    setFlash(ctx.r, failed ? 'error' : 'ok', failed
-      ? 'Some test messages failed — see Settings → Recent messages.'
-      : dry ? 'Logged the test messages (dry-run: Slack/WhatsApp credentials are not set yet).' : 'Test messages sent. Check Slack and WhatsApp.');
+    // results are [slack?, whatsapp?] in the order notify.user sends them.
+    const channels = [ctx.user.slack_user_id && 'Slack', ctx.user.whatsapp && 'WhatsApp'].filter(Boolean);
+    const describe = (r, name) => (!r.ok ? `${name} failed` : r.dryRun ? `${name} not connected yet (logged only)` : `${name} sent`);
+    const summary = results.map((r, i) => describe(r, channels[i])).join(' · ');
+    setFlash(ctx.r, results.some((x) => !x.ok) ? 'error' : 'ok',
+      `${summary}.${results.some((x) => !x.ok) ? ' See Settings → Recent messages for the error.' : ''}`);
     ctx.r.redirect('/team');
   });
 

@@ -70,7 +70,7 @@ The app also checks every sign-in itself: a verified email on one of `ALLOWED_EM
 ## Connect Slack
 
 1. https://api.slack.com/apps → **Create New App → From a manifest**, paste [slack-app-manifest.yml](slack-app-manifest.yml) after replacing `https://YOUR-APP.example.com` with your `PUBLIC_URL`.
-2. Install it to your workspace. Copy the **Bot User OAuth Token** to `SLACK_BOT_TOKEN` and the **Signing Secret** (Basic Information) to `SLACK_SIGNING_SECRET`.
+2. Install it to your workspace (the manifest turns on the app's Messages tab, which Slack requires for DMs). Copy the **Bot User OAuth Token** to `SLACK_BOT_TOKEN` and the **Signing Secret** (Basic Information) to `SLACK_SIGNING_SECRET`.
 3. Pick an on-call channel, run `/invite @PagerDiem` in it, and put its channel ID in `SLACK_ONCALL_CHANNEL`.
 4. Set `SLACK_TEAM_ID` to your workspace ID (it starts with `T`) so requests from any other workspace are rejected.
 

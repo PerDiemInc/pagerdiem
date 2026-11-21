@@ -5,6 +5,10 @@ display_information:
   description: Weekend on-call rotation and paging
   background_color: "#e8492b"
 features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true          # required for the bot to DM people
+    messages_tab_read_only_enabled: true
   bot_user:
     display_name: PagerDiem
     always_online: true
