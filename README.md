@@ -30,6 +30,7 @@ It runs on-prem or in your own cloud account. There is no subscription and no pe
 | **Reminders** | DM 24 hours before your weekend, a "you're on call now" DM when it starts, and a hand-off summary in the channel when it ends. |
 | **Calendar** | Month view of who's on call, plus a feed you can subscribe to from Google Calendar. |
 | **Audit log** | Every add, remove and swap, grouped by day, visible to the whole team. |
+| **Ask an AI (optional)** | Off by default. Engineers type `/ping checkout is failing` in Slack and an AI looks into it and replies in a thread: what it thinks is wrong and what to do. Bring your own Claude API key and skill file, or hand requests to a Claude Code routine that can open a pull request. See [docs/ping.md](docs/ping.md). |
 | **Your team only** | Google sign-in restricted to your Workspace domain. Personal Gmail and other companies are refused. |
 | **Roles** | *Admin* and *Engineer* can be on call and respond. *Non-technical* teammates (leadership, support, product) can view everything and raise an alert, but are never put on call. |
 
@@ -70,7 +71,7 @@ npm test           # quick, in memory; npm run test:pg runs them on PostgreSQL
 | `--no-install` | Skip `npm install` and starting PostgreSQL |
 | `--env-file PATH` | Write somewhere other than `.env` |
 
-It needs bash, so on Windows use WSL. Prefer to do it by hand? `cp .env.example .env`, edit it, `npm install`, `npm start`.
+It needs bash, so on Windows use WSL. Prefer to do it by hand? `cp .env.example .env`, edit it, `npm run db` (starts PostgreSQL), `npm install`, `npm start`.
 
 Locally, without Google or Slack keys, PagerDiem uses email + password sign-in and runs Slack in
 **dry-run mode**: every message is recorded under **Settings → Recent messages** instead of being
@@ -97,7 +98,12 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 | `DATABASE_PATH` | | Opt into a SQLite file for a quick local try, e.g. `data/pagerdiem.db`. Production refuses to start with neither this nor `DATABASE_URL`. |
 | `SESSION_SECRET` | production | Long random string (signs sessions; also derives the calendar feed link unless `CALENDAR_FEED_SECRET` is set) |
 | `PING_ENABLED` | | Default `false`. Turns on the optional `/ping` AI check; also needs `ANTHROPIC_API_KEY` or a routine. See [docs/ping.md](docs/ping.md). |
+| `ANTHROPIC_API_KEY`, `PING_SKILL_FILE`, `PING_MODEL` | | Your Claude API key, the file of instructions the AI follows (default `skills/ping.md`) and the model (default `claude-sonnet-5-5`) |
+| `PING_CHECK_URLS` | | Comma-separated health URLs the check probes, e.g. `https://api.example.com/health` |
+| `PING_COOLDOWN_SECONDS`, `PING_MAX_PER_DAY` | | One check at a time, this far apart (default `120`), and a daily cap (default `30`) |
+| `PING_ROUTINE_URL`, `PING_ROUTINE_TOKEN` | | Hand `/ping` to a Claude Code routine instead of calling the API |
 | `CALENDAR_FEED_SECRET` | | Secret behind the calendar feed link. Change it to revoke every existing link without logging anyone out. |
+| `PORT` | | Default `3000` |
 | `PUBLIC_URL` | | The app's public URL. Set automatically on Render. |
 | `TEAM_NAME`, `APP_NAME` | | Shown on the sign-in page and calendar feed |
 | `TEAM_TIMEZONE`, `SHIFT_START`, `SHIFT_END` | | Defaults: `America/New_York`, `FRI 18:00`, `MON 09:00`. These, and `PEOPLE_PER_WEEKEND`, are only the starting coverage: once an admin saves **Settings → On-call coverage**, the saved days, times and counts win. |
@@ -109,6 +115,7 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 | `SLACK_ONCALL_CHANNEL` | for Slack | Channel ID for on-call posts (invite the bot) |
 | `SLACK_ONCALL_CHANNEL_NAME` | | The channel's name, shown in messages (default `on-call`) |
 | `SLACK_TEAM_ID` | production with Slack | Your Slack workspace ID. Requests from other workspaces are rejected. The app refuses to start in production with Slack connected and no workspace ID, unless `ALLOW_ANY_SLACK_WORKSPACE=true`. |
+| `ALLOW_ANY_SLACK_WORKSPACE` | | `true` lets production run with Slack connected and no `SLACK_TEAM_ID`. Not recommended. |
 | `SLACK_ENGINEERS_GROUP_ID` | | Slack user group (e.g. @engineers) tagged when an incident starts |
 | `API_TOKEN` | | Bearer token for the HTTP API |
 | `WHATSAPP_GROUP_URL` | | Optional team chat invite link, shown as a Join button |
@@ -168,14 +175,20 @@ Databases created before roles existed are migrated on first start: admins stay 
 
 | File | What it does |
 |---|---|
-| `src/time.js` | Weekend windows in the team time zone (DST-safe) |
+| `src/server.js`, `src/config.js` | Startup, the database connection, and every setting read from the environment |
+| `src/db.js` | PostgreSQL (and SQLite) behind one small async API, plus schema and migrations |
+| `src/time.js` | Shift windows in the team time zone (DST-safe), built from the covered days |
 | `src/rotation.js` | Rotation, add/remove yourself, swaps, audit log |
 | `src/incidents.js` | Page → re-page → backup → channel escalation |
 | `src/scheduler.js` | Once a minute: reminders, weekend start/end, escalation, swap announcements |
-| `src/google.js` | Google sign-in restricted to your Workspace |
+| `src/settings.js` | On-call coverage: validation, presets, and the saved value an admin sets |
+| `src/roles.js` | Admin, engineer and non-technical, and what each can do |
+| `src/calendar.js` | The month grid and the Google Calendar feed |
+| `src/ping.js` | The optional `/ping` AI check |
+| `src/auth.js`, `src/google.js` | Sessions, and Google sign-in restricted to your Workspace |
 | `src/notify/` | Slack client and dry-run logging |
 | `src/app.js` | Routes: web pages, Slack commands and buttons, API |
-| `src/views.js` | HTML pages |
+| `src/views.js`, `src/http.js` | HTML pages and styles; routing and request handling |
 
 CI runs the tests on Node 22 and 24 with SQLite, and on Postgres 16. The project site in `docs/` is published to GitHub Pages by `.github/workflows/pages.yml`.
 

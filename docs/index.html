@@ -185,7 +185,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:12px 24px;flex-wrap:
 
 <section id="features"><div class="wrap">
   <h2>What it does</h2>
-  <p class="sub">The parts of on-call a team actually uses.</p>
+  <p class="sub">The parts of on-call a team actually uses. PostgreSQL underneath, one Node.js process on top.</p>
   <div class="bento">
     <div class="tile wide"><h3>Fair rotation, your days</h3><p>People take turns so everyone gets the same share. Two on the weekend by default; admins choose the days and how many people each needs.</p></div>
     <div class="tile wide"><h3>Slack paging</h3><p>Page from the web, <code>/page</code> in Slack or the API. On-call people get a DM with Acknowledge and Resolve buttons.</p></div>
@@ -195,6 +195,8 @@ footer .wrap{display:flex;justify-content:space-between;gap:12px 24px;flex-wrap:
     <div class="tile"><h3>Calendar and audit log</h3><p>Month view, a Google Calendar feed, and a public log of every add, remove and swap.</p></div>
     <div class="tile"><h3>Your team only</h3><p>Google sign-in restricted to your Workspace domain. Slack requests limited to your workspace.</p></div>
     <div class="tile"><h3>Roles</h3><p>Engineers go on call. Non-technical teammates can watch and raise an alert, and are never paged.</p></div>
+    <div class="tile wide"><h3>Ask an AI, if you want to</h3><p>Off by default. Type <code>/ping checkout is failing</code> in Slack and an AI looks into it and replies in a thread with what it thinks is wrong and what to do. Bring your own Claude API key and your own instructions.</p></div>
+    <div class="tile wide"><h3>Set up in minutes</h3><p>One script starts PostgreSQL in Docker, asks a few questions and writes your settings. Your team's days, hours and sign-in domain are plain settings, not code.</p></div>
   </div>
 </div></section>
 
