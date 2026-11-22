@@ -88,6 +88,7 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 | `REMINDER_HOURS_BEFORE`, `REPAGE_EVERY_MINUTES`, `ESCALATE_AFTER_MINUTES` | | Defaults `24`, `5`, `15` |
 | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` | for Slack | From your Slack app |
 | `SLACK_ONCALL_CHANNEL` | for Slack | Channel ID for on-call posts (invite the bot) |
+| `SLACK_ONCALL_CHANNEL_NAME` | | The channel's name, shown in messages (default `on-call`) |
 | `SLACK_TEAM_ID` | recommended | Your Slack workspace ID. Requests from other workspaces are rejected. |
 | `SLACK_ENGINEERS_GROUP_ID` | | Slack user group (e.g. @engineers) tagged when an incident starts |
 | `API_TOKEN` | | Bearer token for the HTTP API |

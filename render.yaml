@@ -34,4 +34,15 @@ services:
         value: FRI 18:00
       - key: SHIFT_END
         value: MON 09:00
-      # Slack keys: add them later under Environment in the Render dashboard.
+      - key: SLACK_BOT_TOKEN       # Slack app: OAuth & Permissions -> Bot User OAuth Token
+        sync: false
+      - key: SLACK_SIGNING_SECRET  # Slack app: Basic Information -> Signing Secret
+        sync: false
+      - key: SLACK_ONCALL_CHANNEL  # channel ID for on-call posts (invite the bot)
+        sync: false
+      - key: SLACK_ONCALL_CHANNEL_NAME
+        value: on-call
+      - key: SLACK_TEAM_ID         # your Slack workspace ID; other workspaces are rejected
+        sync: false
+      - key: SLACK_ENGINEERS_GROUP_ID  # optional user group tagged when an incident starts
+        sync: false

@@ -10,6 +10,7 @@
 //   weekends are projected from the last frozen one. People joining, leaving the team or
 //   being reordered therefore never reshuffle weekends that already happened.
 
+import { config } from './config.js';
 import { isResponder } from './roles.js';
 
 export function makeRotation(db, shifts) {
@@ -164,7 +165,7 @@ export function makeRotation(db, shifts) {
     if (shift.end <= now) throw Object.assign(new Error('That weekend is already over.'), { status: 400 });
     // Dropping out mid-weekend would leave it uncovered with nobody told; someone has to take the spot instead.
     if (shift.start <= now) {
-      throw Object.assign(new Error('That weekend has already started. Ask in #on-call for cover — someone can take your spot.'), { status: 400 });
+      throw Object.assign(new Error(`That weekend has already started. Ask in #${config.slack.channelName} for cover — someone can take your spot.`), { status: 400 });
     }
     const entry = await forShift(shift);
     if (!entry.people.some((p) => p.id === user.id)) return { changed: false, entry };
