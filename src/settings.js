@@ -37,6 +37,32 @@ export function normalizeCoverage(input) {
   return { coverage: { days, start: String(input.start), end: String(input.end), weekendCount, weekdayCount } };
 }
 
+const DAY_INDEX = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
+
+/**
+ * The starting coverage from environment variables, or null when ON_CALL_DAYS is not set
+ * (then SHIFT_START / SHIFT_END / PEOPLE_PER_WEEKEND apply).
+ *   ON_CALL_DAYS=FRI,SAT,SUN  ON_CALL_START=18:00  ON_CALL_END=09:00
+ *   PEOPLE_ON_WEEKEND_DAYS=2  PEOPLE_ON_WEEKDAYS=2
+ */
+export function coverageFromEnv(env) {
+  if (!String(env.ON_CALL_DAYS || '').trim()) return null;
+  const given = String(env.ON_CALL_DAYS).split(/[\s,]+/).filter(Boolean);
+  const names = given.map((d) => d.slice(0, 3).toUpperCase());
+  const bad = given.find((d, i) => !(names[i] in DAY_INDEX));
+  if (bad) throw new Error(`ON_CALL_DAYS has "${bad}"; use day names like FRI,SAT,SUN`);
+  const people = env.PEOPLE_PER_WEEKEND || 2;
+  const { coverage, error } = normalizeCoverage({
+    days: names.map((d) => DAY_INDEX[d]),
+    start: env.ON_CALL_START || '18:00',
+    end: env.ON_CALL_END || '09:00',
+    weekendCount: env.PEOPLE_ON_WEEKEND_DAYS || people,
+    weekdayCount: env.PEOPLE_ON_WEEKDAYS || people,
+  });
+  if (error) throw new Error(`Coverage settings: ${error}`);
+  return coverage;
+}
+
 /** Turn "@example.com, example.org" into a clean list. Returns { domains } or { error }. */
 export function normalizeDomains(text) {
   const domains = [...new Set(String(text || '').split(/[\s,;]+/).map((d) => d.replace(/^@/, '').trim().toLowerCase()).filter(Boolean))];

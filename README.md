@@ -51,12 +51,22 @@ It runs on-prem or in your own cloud account. There is no subscription and no pe
 Requires Node.js 22.13+ (uses the built-in `node:sqlite`).
 
 ```bash
-git clone <this repo> && cd pagerdiem
-cp .env.example .env
-npm install
+git clone https://github.com/PerDiemInc/pagerdiem && cd pagerdiem
+./init.sh          # a few questions, then it writes .env and installs
 npm start          # http://localhost:3000
 npm test
 ```
+
+`./init.sh` asks for your company email domain, time zone, the days that need someone on call and how many people, and (optionally) your Slack details. It generates the session secret and API token for you, saves `.env` readable only by you, runs `npm install` and offers to start the app. Press Enter to accept any default. It never overwrites an existing `.env` unless you pass `--force`.
+
+| Option | |
+|---|---|
+| `--yes` | Accept every default, ask nothing (good for scripts) |
+| `--force` | Replace an existing `.env` |
+| `--no-install` | Skip `npm install` |
+| `--env-file PATH` | Write somewhere other than `.env` |
+
+It needs bash, so on Windows use WSL. Prefer to do it by hand? `cp .env.example .env`, edit it, `npm install`, `npm start`.
 
 Locally, without Google or Slack keys, PagerDiem uses email + password sign-in and runs Slack in
 **dry-run mode**: every message is recorded under **Settings → Recent messages** instead of being
@@ -85,6 +95,8 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 | `TEAM_NAME`, `APP_NAME` | | Shown on the sign-in page and calendar feed |
 | `TEAM_TIMEZONE`, `SHIFT_START`, `SHIFT_END` | | Defaults: `America/New_York`, `FRI 18:00`, `MON 09:00`. These, and `PEOPLE_PER_WEEKEND`, are only the starting coverage: once an admin saves **Settings → On-call coverage**, the saved days, times and counts win. |
 | `PEOPLE_PER_WEEKEND` | | Default `2` |
+| `ON_CALL_DAYS`, `ON_CALL_START`, `ON_CALL_END` | | Days that need cover, e.g. `FRI,SAT,SUN`, and the shift's start and end time (`18:00`, `09:00`). Win over `SHIFT_START` / `SHIFT_END` when set. |
+| `PEOPLE_ON_WEEKEND_DAYS`, `PEOPLE_ON_WEEKDAYS` | | People per shift on weekend days and on weekdays. Default `PEOPLE_PER_WEEKEND`. |
 | `REMINDER_HOURS_BEFORE`, `REPAGE_EVERY_MINUTES`, `ESCALATE_AFTER_MINUTES` | | Defaults `24`, `5`, `15` |
 | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` | for Slack | From your Slack app |
 | `SLACK_ONCALL_CHANNEL` | for Slack | Channel ID for on-call posts (invite the bot) |
