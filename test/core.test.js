@@ -7,7 +7,7 @@ process.env.SHIFT_END = 'MON 09:00';
 process.env.ESCALATE_AFTER_MINUTES = '15';
 process.env.REPAGE_EVERY_MINUTES = '5';
 
-const { config, slackTeamProblem } = await import('../src/config.js');
+const { config, slackTeamProblem, databaseProblem, LOCAL_POSTGRES } = await import('../src/config.js');
 const { feedToken } = await import('../src/calendar.js');
 const { makeShifts } = await import('../src/time.js');
 const { normalizeCoverage, describeDays, coverageFromEnv } = await import('../src/settings.js');
@@ -728,4 +728,13 @@ test('incident list can be narrowed to one status', async () => {
   assert.deepEqual((await incidents.list({ status: 'open' })).map((i) => i.title), ['Two']);
   assert.deepEqual((await incidents.list({ status: 'acknowledged' })).map((i) => i.title), ['One']);
   assert.equal((await incidents.list()).length, 2);
+});
+
+test('PostgreSQL is the default database; SQLite is an explicit choice; production needs a URL', () => {
+  assert.equal(databaseProblem({}), null, 'local development falls back to the Docker PostgreSQL');
+  assert.equal(databaseProblem({ NODE_ENV: 'production', DATABASE_URL: 'postgres://u:p@h/d' }), null);
+  assert.match(databaseProblem({ NODE_ENV: 'production' }), /DATABASE_URL is required in production/);
+  assert.equal(databaseProblem({ NODE_ENV: 'production', DATABASE_PATH: '/data/x.db' }), null, 'SQLite is possible, but only on purpose');
+  assert.match(LOCAL_POSTGRES, /^postgres:\/\/pagerdiem:pagerdiem@localhost:5432\/pagerdiem$/);
+  assert.equal(config.database.startsWith('postgres'), process.env.DATABASE_PATH ? false : true, 'with nothing set the app targets PostgreSQL');
 });

@@ -10,20 +10,26 @@ ENV_FILE=".env"
 ASSUME_YES=0
 FORCE=0
 INSTALL=1
+DB_CHOICE=1          # 1 PostgreSQL in Docker (the default), 2 your own PostgreSQL URL, 3 SQLite file
+DB_URL_V="postgres://pagerdiem:pagerdiem@localhost:5432/pagerdiem"
 
 usage() {
   cat <<'EOF'
 Usage: ./init.sh [options]
 
-Creates .env for running PagerDiem on your machine, installs dependencies and
-offers to start it. Press Enter to accept the value shown in [brackets].
+Creates .env for running PagerDiem on your machine, starts PostgreSQL in Docker,
+installs dependencies and offers to start it. Press Enter to accept the value shown in [brackets].
+
+PostgreSQL is the database. By default it starts one in Docker for you.
 
 Options:
-  -y, --yes         Accept every default and do not ask anything
-  -f, --force       Replace an existing .env
-      --no-install  Skip npm install
-      --env-file F  Write to F instead of .env
-  -h, --help        Show this help
+  -y, --yes             Accept every default and do not ask anything
+  -f, --force           Replace an existing .env
+      --database-url U  Use your own PostgreSQL (postgres://user:password@host:5432/db)
+      --sqlite          Use a SQLite file instead: a quick try without Docker, not for real use
+      --no-install      Skip npm install and starting PostgreSQL
+      --env-file F      Write to F instead of .env
+  -h, --help            Show this help
 EOF
 }
 
@@ -32,6 +38,11 @@ while [ $# -gt 0 ]; do
     -y|--yes) ASSUME_YES=1 ;;
     -f|--force) FORCE=1 ;;
     --no-install) INSTALL=0 ;;
+    --sqlite) [ "$DB_CHOICE" != 2 ] || { echo "Use either --sqlite or --database-url, not both." >&2; exit 1; }; DB_CHOICE=3 ;;
+    --database-url)
+      [ $# -ge 2 ] || { echo "--database-url needs a PostgreSQL URL" >&2; exit 1; }
+      [ "$DB_CHOICE" != 3 ] || { echo "Use either --sqlite or --database-url, not both." >&2; exit 1; }
+      DB_CHOICE=2; DB_URL_V="$2"; shift ;;
     --env-file)
       [ $# -ge 2 ] || { echo "--env-file needs a path" >&2; exit 1; }
       ENV_FILE="$2"; shift ;;
@@ -128,10 +139,19 @@ is_urls() {
     [[ "$u" =~ ^https?://[^[:space:]]+$ ]] || { say "  \"$u\" is not a URL. Use https://example.com/health"; return 1; }
   done
 }
+is_pgurl() { [[ "$1" =~ ^postgres(ql)?://[^[:space:]]+$ ]] || { say "  A PostgreSQL URL looks like postgres://user:password@host:5432/dbname"; return 1; }; }
 is_group() { [[ "$1" =~ ^S[A-Z0-9]{6,}$ ]] || { say "  A user group ID looks like S0123456789."; return 1; }; }
 
 say "${BOLD}PagerDiem local setup${RESET}"
 say "${DIM}Press Enter to accept the value in [brackets]. Everything can be changed later in .env.${RESET}"
+
+step "Database"
+case "$DB_CHOICE" in
+  1) say "PostgreSQL in Docker, started for you. ${DIM}(--database-url URL for your own PostgreSQL, --sqlite for a SQLite file)${RESET}" ;;
+  2) is_pgurl "$DB_URL_V" || fail "--database-url: that is not a PostgreSQL URL."
+     say "Your PostgreSQL: $(printf '%s' "$DB_URL_V" | sed 's#//[^@]*@#//#')" ;;
+  3) say "SQLite file, as you asked. ${DIM}Fine for a quick try, not for real use. PostgreSQL is the default.${RESET}" ;;
+esac
 
 step "Your team"
 ask APP_NAME_V "App name" "PagerDiem" plain
@@ -198,6 +218,12 @@ set_var() {
 
 DAYS_NORMALIZED="$(printf '%s' "$DAYS_V" | tr '[:lower:]' '[:upper:]' | tr -s ' ;,' ',' | sed 's/^,//; s/,$//')"
 
+if [ "$DB_CHOICE" = 3 ]; then
+  set_var DATABASE_URL ""
+  set_var DATABASE_PATH "data/pagerdiem.db"
+else
+  set_var DATABASE_URL "$DB_URL_V"
+fi
 set_var PORT "$PORT_V"
 set_var PUBLIC_URL "http://localhost:$PORT_V"
 set_var SESSION_SECRET "$(rand_hex 32)"
@@ -232,6 +258,16 @@ if [ "$INSTALL" = 1 ]; then
   step "Installing dependencies"
   command -v npm >/dev/null 2>&1 || fail "npm is not installed. It comes with Node.js: https://nodejs.org"
   npm install --no-audit --no-fund
+fi
+
+if [ "$DB_CHOICE" = 1 ] && [ "$INSTALL" = 1 ]; then
+  step "Starting PostgreSQL"
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    docker compose up -d --wait db || fail "Could not start PostgreSQL. Is Docker running? Start it, then run: npm run db"
+  else
+    say "Docker was not found, so PostgreSQL was not started. Install Docker and run ${BOLD}npm run db${RESET},"
+    say "or run ${BOLD}./init.sh --force --database-url URL${RESET} (your own PostgreSQL) or ${BOLD}./init.sh --force --sqlite${RESET}."
+  fi
 fi
 
 step "Ready"
