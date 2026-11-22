@@ -85,6 +85,8 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 | `TEAM_NAME`, `APP_NAME` | | Shown on the sign-in page and calendar feed |
 | `TEAM_TIMEZONE`, `SHIFT_START`, `SHIFT_END` | | Defaults: `America/New_York`, `FRI 18:00`, `MON 09:00`. These, and `PEOPLE_PER_WEEKEND`, are only the starting coverage: once an admin saves **Settings → On-call coverage**, the saved days, times and counts win. |
 | `PEOPLE_PER_WEEKEND` | | Default `2` |
+| `ON_CALL_DAYS`, `ON_CALL_START`, `ON_CALL_END` | | Days that need cover, e.g. `FRI,SAT,SUN`, and the shift's start and end time (`18:00`, `09:00`). Win over `SHIFT_START` / `SHIFT_END` when set. |
+| `PEOPLE_ON_WEEKEND_DAYS`, `PEOPLE_ON_WEEKDAYS` | | People per shift on weekend days and on weekdays. Default `PEOPLE_PER_WEEKEND`. |
 | `REMINDER_HOURS_BEFORE`, `REPAGE_EVERY_MINUTES`, `ESCALATE_AFTER_MINUTES` | | Defaults `24`, `5`, `15` |
 | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` | for Slack | From your Slack app |
 | `SLACK_ONCALL_CHANNEL` | for Slack | Channel ID for on-call posts (invite the bot) |

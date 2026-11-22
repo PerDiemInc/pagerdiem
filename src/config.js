@@ -1,5 +1,6 @@
 // All settings come from the environment (twelve-factor). See .env.example.
 import crypto from 'node:crypto';
+import { coverageFromEnv } from './settings.js';
 
 const env = process.env;
 
@@ -55,6 +56,9 @@ export const config = {
   timezone: env.TEAM_TIMEZONE || 'America/New_York',
   shiftStart: parseDayTime(env.SHIFT_START || 'FRI 18:00'),
   shiftEnd: parseDayTime(env.SHIFT_END || 'MON 09:00'),
+  // Or set ON_CALL_DAYS (e.g. FRI,SAT,SUN) with ON_CALL_START / ON_CALL_END and
+  // PEOPLE_ON_WEEKEND_DAYS / PEOPLE_ON_WEEKDAYS. An admin can still change these in Settings.
+  coverage: coverageFromEnv(env),
   reminderHoursBefore: int('REMINDER_HOURS_BEFORE', 24),
   // How many people the rotation puts on each weekend (anyone can add themselves on top).
   perWeekend: int('PEOPLE_PER_WEEKEND', 2),

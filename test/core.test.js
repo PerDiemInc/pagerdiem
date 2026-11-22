@@ -9,7 +9,7 @@ process.env.REPAGE_EVERY_MINUTES = '5';
 
 const { config } = await import('../src/config.js');
 const { makeShifts } = await import('../src/time.js');
-const { normalizeCoverage, normalizeDomains, describeDays } = await import('../src/settings.js');
+const { normalizeCoverage, normalizeDomains, describeDays, coverageFromEnv } = await import('../src/settings.js');
 const { freshDb } = await import('./helpers.js');
 const { openDb } = await import('../src/db.js');
 const { DatabaseSync } = await import('node:sqlite');
@@ -660,4 +660,13 @@ test('the channel name shown in messages comes from the environment setting', as
   } finally {
     config.slack.channelName = 'on-call';
   }
+});
+
+test('coverage can be set from environment variables', () => {
+  assert.equal(coverageFromEnv({}), null, 'unset means the SHIFT_START / SHIFT_END defaults apply');
+  assert.deepEqual(coverageFromEnv({ ON_CALL_DAYS: 'mon, Tue,wednesday', ON_CALL_START: '17:30', ON_CALL_END: '08:00', PEOPLE_ON_WEEKDAYS: '3', PEOPLE_PER_WEEKEND: '2' }),
+    { days: [1, 2, 3], start: '17:30', end: '08:00', weekendCount: 2, weekdayCount: 3 });
+  assert.deepEqual(coverageFromEnv({ ON_CALL_DAYS: 'FRI,SAT,SUN' }), { days: [0, 5, 6], start: '18:00', end: '09:00', weekendCount: 2, weekdayCount: 2 });
+  assert.throws(() => coverageFromEnv({ ON_CALL_DAYS: 'FRI,FUNDAY' }), /FUNDAY/);
+  assert.throws(() => coverageFromEnv({ ON_CALL_DAYS: 'FRI', ON_CALL_START: '6pm' }), /Start time/);
 });
