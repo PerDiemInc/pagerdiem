@@ -240,7 +240,7 @@ export function makeIncidents({ db, rotation, notify }) {
                        ORDER BY CASE WHEN assigned_user_id = ? OR backup_user_id = ? THEN 1 ELSE 0 END DESC, id DESC LIMIT 1`, [user.id, user.id]));
   }
 
-  async function list({ limit = 50 } = {}) {
+  async function list({ limit = 50, status = null } = {}) {
     return (await db.all(`
       SELECT i.*, a.name AS assigned_name, b.name AS backup_name, k.name AS acked_by_name, r.name AS resolved_by_name
       FROM incidents i
@@ -248,8 +248,24 @@ export function makeIncidents({ db, rotation, notify }) {
       LEFT JOIN users b ON b.id = i.backup_user_id
       LEFT JOIN users k ON k.id = i.acked_by
       LEFT JOIN users r ON r.id = i.resolved_by
-      ORDER BY CASE WHEN i.status = 'resolved' THEN 1 ELSE 0 END, i.id DESC LIMIT ?`, [limit]));
+      ${status ? 'WHERE i.status = ?' : ''}
+      ORDER BY CASE WHEN i.status = 'resolved' THEN 1 ELSE 0 END, i.id DESC LIMIT ?`, status ? [status, limit] : [limit]));
   }
 
-  return { create, acknowledge, resolve, tick, get, events, list, latestOpenFor };
+  /** Counts per status, plus incidents and the median wait for an acknowledgement over the last 30 days. */
+  async function stats(now = new Date()) {
+    const byStatus = Object.fromEntries((await db.all('SELECT status, COUNT(*) AS n FROM incidents GROUP BY status'))
+      .map((r) => [r.status, Number(r.n)]));
+    const recent = await db.all('SELECT created_at, acked_at FROM incidents WHERE created_at >= ?',
+      [new Date(now.getTime() - 30 * 24 * 60 * MINUTE).toISOString()]);
+    const waits = recent.filter((r) => r.acked_at).map((r) => (new Date(r.acked_at) - new Date(r.created_at)) / MINUTE).sort((a, b) => a - b);
+    const mid = Math.floor(waits.length / 2);
+    const median = !waits.length ? null : waits.length % 2 ? waits[mid] : (waits[mid - 1] + waits[mid]) / 2;
+    return {
+      open: byStatus.open ?? 0, acknowledged: byStatus.acknowledged ?? 0, resolved: byStatus.resolved ?? 0,
+      last30Days: recent.length, medianAckMinutes: median === null ? null : Math.round(median),
+    };
+  }
+
+  return { create, acknowledge, resolve, tick, get, events, list, stats, latestOpenFor };
 }

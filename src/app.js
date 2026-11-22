@@ -109,11 +109,11 @@ export function createApp({ db, notifierOverrides } = {}) {
   async function createMember({ name, email, slack, whatsapp: rawPhone, passwordHash }) {
     name = cleanName(name);
     const whatsapp = normalizePhone(rawPhone);
-    if (!name) return { error: 'Please enter your name.' };
-    if (!whatsapp) return { error: 'Please enter your phone number with country code, e.g. +1 415 555 0123.' };
-    if (await userByEmail(email)) return { error: 'That email is already signed up — log in instead.' };
+    if (!name) return { error: { field: 'name', message: 'Please enter your name.' } };
+    if (!whatsapp) return { error: { field: 'whatsapp', message: 'Please enter your phone number with country code, e.g. +1 415 555 0123.' } };
+    if (await userByEmail(email)) return { error: { field: 'email', message: 'That email is already signed up — log in instead.' } };
     const slackId = await resolveSlack(slack, email);
-    if (!slackId) return { error: "We couldn't find you on Slack. Enter your Slack member ID (Slack profile → ⋮ → Copy member ID)." };
+    if (!slackId) return { error: { field: 'slack', message: "We couldn't find you on Slack. Enter your Slack member ID (Slack profile → ⋮ → Copy member ID)." } };
     const clash = await contactClash({ slackId, whatsapp });
     if (clash) return { error: clash };
 
@@ -127,12 +127,12 @@ export function createApp({ db, notifierOverrides } = {}) {
     return { user, isFirst };
   }
 
-  /** Someone else already uses this Slack account or phone number? Returns a message or null. */
+  /** Someone else already uses this Slack account or phone number? Returns { field, message } or null. */
   async function contactClash({ slackId, whatsapp, exceptId = null }) {
     const bySlack = await userBySlack(slackId);
-    if (bySlack && bySlack.id !== exceptId) return `That Slack account already belongs to ${bySlack.name}. Use your own Slack account.`;
+    if (bySlack && bySlack.id !== exceptId) return { field: 'slack', message: `That Slack account already belongs to ${bySlack.name}. Use your own Slack account.` };
     const byPhone = await userByPhone(whatsapp);
-    if (byPhone && byPhone.id !== exceptId) return `That phone number already belongs to ${byPhone.name}. Use your own number.`;
+    if (byPhone && byPhone.id !== exceptId) return { field: 'whatsapp', message: `That phone number already belongs to ${byPhone.name}. Use your own number.` };
     return null;
   }
 
@@ -166,11 +166,11 @@ export function createApp({ db, notifierOverrides } = {}) {
     const b = ctx.body;
     const fail = (error) => ctx.r.html(authView('signup', { values: b, error }), 400);
     const email = String(b.email || '').trim().toLowerCase();
-    if (!EMAIL.test(email)) return fail('Please enter a valid email.');
+    if (!EMAIL.test(email)) return fail({ field: 'email', message: 'Please enter a valid email.' });
     if (config.allowedEmailDomains.length && !config.allowedEmailDomains.includes(email.split('@')[1])) {
-      return fail(`Sign up with your @${config.allowedEmailDomains.join(' or @')} email.`);
+      return fail({ field: 'email', message: `Sign up with your @${config.allowedEmailDomains.join(' or @')} email.` });
     }
-    if (String(b.password || '').length < 10) return fail('Password must be at least 10 characters.');
+    if (String(b.password || '').length < 10) return fail({ field: 'password', message: 'Password must be at least 10 characters.' });
     const { user, isFirst, error } = await createMember({
       name: b.name, email, slack: b.slack, whatsapp: b.whatsapp, passwordHash: hashPassword(String(b.password)),
     });
@@ -392,7 +392,11 @@ export function createApp({ db, notifierOverrides } = {}) {
   // ---------- incidents ----------
   router.get('/incidents', async (ctx) => {
     if (!requireUser(ctx)) return;
-    ctx.r.html(views.incidentsPage({ user: ctx.user, incidents: (await incidents.list({ limit: 200 })), now: new Date(), flash: takeFlash(ctx) }));
+    const status = ['open', 'acknowledged', 'resolved'].includes(ctx.query.get('status')) ? ctx.query.get('status') : null;
+    const now = new Date();
+    ctx.r.html(views.incidentsPage({
+      user: ctx.user, incidents: await incidents.list({ limit: 200, status }), status, stats: await incidents.stats(now), now, flash: takeFlash(ctx),
+    }));
   });
 
   router.post('/incidents', async (ctx) => {
@@ -503,7 +507,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     }
     const clash = await contactClash({ slackId, whatsapp, exceptId: ctx.user.id });
     if (clash) {
-      setFlash(ctx.r, 'error', clash);
+      setFlash(ctx.r, 'error', clash.message);
       return ctx.r.redirect('/team');
     }
     (await db.run('UPDATE users SET name = ?, whatsapp = ?, slack_user_id = ? WHERE id = ?', [name, whatsapp, slackId, ctx.user.id]));
@@ -736,7 +740,9 @@ export function createApp({ db, notifierOverrides } = {}) {
       const uid = sessionUserId(req.headers.cookie);
       // Sessions are stateless cookies, so a removed teammate is shut out by checking on every request.
       const sessionUser = uid ? await rotation.userById(uid) : null;
-      ctx.user = sessionUser?.active ? sessionUser : null;
+      ctx.user = sessionUser?.active
+        ? { ...sessionUser, openIncidents: Number((await db.get("SELECT COUNT(*) AS n FROM incidents WHERE status = 'open'")).n) }
+        : null;
       await found.handler(ctx);
     } catch (err) {
       const status = err.status || 500;

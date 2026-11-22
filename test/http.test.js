@@ -291,3 +291,52 @@ test('on-call API does not leak names without the API token', async () => {
   const res = await fetch(`${base}/api/oncall`, { headers: { Authorization: 'Bearer test-api-token' } });
   assert.equal(res.status, 200);
 });
+
+test('sign-up errors show on the field that needs fixing', async () => {
+  const fieldError = (html, id) => {
+    const input = html.match(new RegExp(`<input[^>]*id="${id}"[^>]*>`))?.[0] ?? '';
+    if (!input.includes('aria-invalid="true"') || !input.includes(`aria-describedby="${id}-error"`)) return null;
+    return html.match(new RegExp(`id="${id}-error"[^>]*>([^<]*)<`))?.[1] ?? null;
+  };
+  const signup = async (fields) => (await post('/signup', form({
+    name: 'Cal', email: 'cal@example.com', password: 'longenough123', slack: 'U0CAL12345', whatsapp: '+14155550199', ...fields,
+  }))).text();
+
+  let html = await signup({ email: 'nope' });
+  assert.equal(fieldError(html, 'email'), 'Please enter a valid email.');
+  assert.equal(fieldError(html, 'password'), null, 'only the field with the problem is marked');
+  assert.equal(fieldError(await signup({ password: 'short' }), 'password'), 'Password must be at least 10 characters.');
+  assert.equal(fieldError(await signup({ name: ' ' }), 'name'), 'Please enter your name.');
+  assert.match(fieldError(await signup({ whatsapp: '+14155550100' }), 'whatsapp'), /already belongs to Ana Admin/);
+  assert.match(fieldError(await signup({ slack: 'U0ANA12345' }), 'slack'), /already belongs to Ana Admin/);
+  html = await signup({ whatsapp: 'call me' });
+  assert.match(fieldError(html, 'whatsapp'), /country code/);
+  assert.match(html, /value="Cal"/, 'what they typed is kept');
+
+  const views = await import('../src/views.js');
+  const welcome = views.welcomePage({ identity: { name: 'Cal Reyes', email: 'cal@example.com' }, values: {}, error: { field: 'name', message: 'Please enter your name.' } });
+  assert.equal(fieldError(welcome, 'name'), 'Please enter your name.');
+});
+
+test('the incidents page has status tabs with counts, and the nav shows how many are open', async () => {
+  const ana = cookieOf(await post('/login', form({ email: 'ana@example.com', password: 'longenough123' })));
+  const page = async (path) => (await fetch(base + path, { headers: { cookie: ana } })).text();
+  const made = [];
+  for (const title of ['Tabs open', 'Tabs acknowledged']) {
+    const res = await post('/incidents', form({ title }), { cookie: ana });
+    made.push(res.headers.get('location').split('/').pop());
+  }
+  await post(`/incidents/${made[1]}/ack`, form({}), { cookie: ana });
+  const count = async (status) => Number((await app.db.get('SELECT COUNT(*) AS n FROM incidents WHERE status = ?', [status])).n);
+  const open = await count('open');
+
+  const html = await page('/incidents?status=open');
+  assert.match(html, /Tabs open/);
+  assert.doesNotMatch(html, /Tabs acknowledged/);
+  assert.match(html, new RegExp(`aria-current="page">Open <span class="count">${open}</span>`));
+  assert.match(html, new RegExp(`>Acknowledged <span class="count">${await count('acknowledged')}</span>`));
+  assert.match(await page('/incidents'), /Tabs acknowledged/);
+  assert.match(await page('/incidents?status=bogus'), /Tabs acknowledged/, 'an unknown status shows everything');
+
+  assert.match(await page('/calendar'), new RegExp(`aria-label="${open} open incidents?">${open}</span>`));
+});
