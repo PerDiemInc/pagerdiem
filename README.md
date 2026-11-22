@@ -48,22 +48,26 @@ It runs on-prem or in your own cloud account. There is no subscription and no pe
 
 ## Quick start (local)
 
-Requires Node.js 22.13+ (uses the built-in `node:sqlite`).
+Requires Node.js 22.13+ and Docker for the default local PostgreSQL (or bring your own PostgreSQL, below).
 
 ```bash
 git clone https://github.com/PerDiemInc/pagerdiem && cd pagerdiem
-./init.sh          # a few questions, then it writes .env and installs
+./init.sh          # a few questions; starts PostgreSQL in Docker, writes .env, installs
 npm start          # http://localhost:3000
-npm test
+npm test           # quick, in memory; npm run test:pg runs them on PostgreSQL
 ```
 
-`./init.sh` asks for your company email domain, time zone, the days that need someone on call and how many people, and (optionally) your Slack details. It generates the session secret and API token for you, saves `.env` readable only by you, runs `npm install` and offers to start the app. Press Enter to accept any default. It never overwrites an existing `.env` unless you pass `--force`.
+`./init.sh` asks for your company email domain, time zone, the days that need someone on call and how many people, and (optionally) your Slack details and the `/ping` AI check. It generates the session secret and API token for you, saves `.env` readable only by you, runs `npm install` and offers to start the app. Press Enter to accept any default. It never overwrites an existing `.env` unless you pass `--force`.
+
+**PostgreSQL is the default database, and `init.sh` never asks about it.** It starts one in Docker for you (`docker compose up -d --wait db`, also `npm run db`). Use your own PostgreSQL with `./init.sh --database-url postgres://user:password@host:5432/dbname`. SQLite is only for a quick try without Docker and only if you ask: `./init.sh --sqlite` (or `DATABASE_PATH=data/pagerdiem.db`). `docker compose --profile app up` runs the database and the app together.
 
 | Option | |
 |---|---|
 | `--yes` | Accept every default, ask nothing (good for scripts) |
 | `--force` | Replace an existing `.env` |
-| `--no-install` | Skip `npm install` |
+| `--database-url URL` | Use your own PostgreSQL instead of the Docker one |
+| `--sqlite` | Use a SQLite file instead of PostgreSQL (a quick try, not for real use) |
+| `--no-install` | Skip `npm install` and starting PostgreSQL |
 | `--env-file PATH` | Write somewhere other than `.env` |
 
 It needs bash, so on Windows use WSL. Prefer to do it by hand? `cp .env.example .env`, edit it, `npm install`, `npm start`.
@@ -89,7 +93,8 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 |---|---|---|
 | `ALLOWED_EMAIL_DOMAINS` | production | Your Google Workspace email domain(s), comma-separated, e.g. `example.com`. Set only here: change it and restart to change who can sign in. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | production | Google OAuth client (Web application). Without them, production lets nobody in. |
-| `DATABASE_URL` | production | Postgres connection string. Without it, a local SQLite file is used. |
+| `DATABASE_URL` | production | PostgreSQL connection string, required in production. Locally it defaults to the Docker database in `docker-compose.yml`. |
+| `DATABASE_PATH` | | Opt into a SQLite file for a quick local try, e.g. `data/pagerdiem.db`. Production refuses to start with neither this nor `DATABASE_URL`. |
 | `SESSION_SECRET` | production | Long random string (signs sessions; also derives the calendar feed link unless `CALENDAR_FEED_SECRET` is set) |
 | `PING_ENABLED` | | Default `false`. Turns on the optional `/ping` AI check; also needs `ANTHROPIC_API_KEY` or a routine. See [docs/ping.md](docs/ping.md). |
 | `CALENDAR_FEED_SECRET` | | Secret behind the calendar feed link. Change it to revoke every existing link without logging anyone out. |
@@ -158,7 +163,7 @@ Databases created before roles existed are migrated on first start: admins stay 
 ## Development
 
 - Plain Node.js, no framework. The only runtime dependency is `pg`.
-- SQL runs on both SQLite (local, tests) and Postgres (production).
+- PostgreSQL is the database. The SQL also runs on SQLite, which keeps `npm test` fast and free of dependencies. `npm run test:pg` runs the same tests on the Docker PostgreSQL (against a separate `pagerdiem_test` database that it wipes).
 - Tests: `npm test`, or against Postgres with `TEST_DATABASE_URL=postgres://… npm test` (wipes that database).
 
 | File | What it does |

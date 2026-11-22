@@ -2,8 +2,20 @@ import { config, slackEnabled } from './config.js';
 import { openDb } from './db.js';
 import { createApp } from './app.js';
 
-const db = await openDb(config.database);
-console.log(`  Database: ${db.dialect === 'pg' ? 'Postgres' : config.database}`);
+let db;
+try {
+  db = await openDb(config.database);
+} catch (err) {
+  const where = /^postgres/.test(config.database) ? config.database.replace(/\/\/[^@]*@/, '//') : config.database;
+  const reason = err.message || err.code || err.errors?.[0]?.code || String(err);
+  console.error(`Could not open the database (${where}): ${reason}`);
+  if (/^postgres/.test(config.database)) {
+    console.error('PagerDiem uses PostgreSQL. To start one locally: npm run db (needs Docker).');
+    console.error('Or set DATABASE_URL to your own PostgreSQL, or DATABASE_PATH=data/pagerdiem.db to use a SQLite file for a quick try.');
+  }
+  process.exit(1);
+}
+console.log(`  Database: ${db.dialect === 'pg' ? 'PostgreSQL' : `SQLite file ${config.database} (set DATABASE_URL to use PostgreSQL)`}`);
 const app = createApp({ db });
 await app.loadSettings();
 

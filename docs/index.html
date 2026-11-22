@@ -176,7 +176,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:12px 24px;flex-wrap:
   <h2>Pay for the server, not the seats</h2>
   <p class="sub">Most paging tools bill per person, per month. PagerDiem is software you run yourself.</p>
   <div class="bento">
-    <div class="tile"><h3>On-prem</h3><p>Run it on your own servers or in your own cloud account. One Docker image and one Postgres database, or a SQLite file to try it. Your incident data never leaves your network.</p></div>
+    <div class="tile"><h3>On-prem</h3><p>Run it on your own servers or in your own cloud account. One Docker image and one PostgreSQL database; a SQLite file works for a quick try. Your incident data never leaves your network.</p></div>
     <div class="tile"><h3>No subscription</h3><p>MIT licensed. No plan to pick, no trial that ends, no sales call, nothing to renew.</p></div>
     <div class="tile"><h3>No cost past 100 people</h3><p>There are no seats to count. Ten engineers or a thousand, PagerDiem itself costs nothing.</p></div>
   </div>
@@ -232,9 +232,9 @@ footer .wrap{display:flex;justify-content:space-between;gap:12px 24px;flex-wrap:
       <a class="go" href="https://github.com/PerDiemInc/pagerdiem/blob/main/docs/deploy-aws.md">Read the AWS guide</a></div>
   </div>
   <h3 class="try">Or try it locally in a minute</h3>
-  <p class="sub" style="margin:8px 0 0">The setup script asks for your email domain, time zone and on-call days, makes the secrets for you, and installs everything.</p>
+  <p class="sub" style="margin:8px 0 0">The setup script starts PostgreSQL in Docker, asks for your email domain, time zone and on-call days, makes the secrets for you, and installs everything.</p>
 <pre class="term"><code><span class="c">$</span> git clone https://github.com/PerDiemInc/pagerdiem &amp;&amp; cd pagerdiem
-<span class="c">$</span> ./init.sh      <span class="c"># a few questions, then it writes .env and installs</span>
+<span class="c">$</span> ./init.sh      <span class="c"># a few questions, starts PostgreSQL in Docker, writes .env</span>
 <span class="c">$</span> npm start      <span class="c"># http://localhost:3000 (Slack runs in dry-run until you add keys)</span></code></pre>
 </div></section>
 </main>

@@ -22,6 +22,20 @@ export function parseDayTime(value) {
 
 const isProd = env.NODE_ENV === 'production';
 
+/** The Postgres that `docker compose up -d db` starts (see docker-compose.yml). */
+export const LOCAL_POSTGRES = 'postgres://pagerdiem:pagerdiem@localhost:5432/pagerdiem';
+
+/**
+ * PagerDiem uses PostgreSQL. SQLite is an explicit opt-in (DATABASE_PATH) for a quick local try;
+ * production needs DATABASE_URL because a SQLite file on a host's disk is lost on redeploy.
+ */
+export function databaseProblem(source) {
+  if (source.NODE_ENV === 'production' && !source.DATABASE_URL && !source.DATABASE_PATH) {
+    return 'DATABASE_URL is required in production (a PostgreSQL connection string, like postgres://user:password@host:5432/dbname).';
+  }
+  return null;
+}
+
 /**
  * In production, a connected Slack must be pinned to your workspace: without SLACK_TEAM_ID any
  * workspace holding a valid signature is accepted. ALLOW_ANY_SLACK_WORKSPACE=true opts out.
@@ -45,7 +59,7 @@ export function slackTeamProblem(source) {
   return null;
 }
 {
-  const problem = slackTeamProblem(env) || pingProblem(env);
+  const problem = databaseProblem(env) || slackTeamProblem(env) || pingProblem(env);
   if (problem) throw new Error(problem);
 }
 
@@ -65,8 +79,9 @@ export const config = {
   // Free hosts (Render) sleep after ~15 idle minutes, which would stop reminders and escalation.
   // When on, the app requests its own public URL every 10 minutes to stay awake.
   keepAwake: (env.KEEP_AWAKE ?? (env.RENDER ? 'true' : 'false')) === 'true',
-  // Postgres URL in production (e.g. Neon); otherwise a local SQLite file.
-  database: env.DATABASE_URL || env.DATABASE_PATH || 'data/pagerdiem.db',
+  // PostgreSQL by default (the local Docker one, or DATABASE_URL, e.g. Neon in production).
+  // A SQLite file only when someone asks for it with DATABASE_PATH.
+  database: env.DATABASE_URL || env.DATABASE_PATH || LOCAL_POSTGRES,
   isProd,
   // Branding: shown in the header, sign-in page and calendar feed.
   appName: env.APP_NAME || 'PagerDiem',

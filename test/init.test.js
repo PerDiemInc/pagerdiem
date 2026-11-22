@@ -26,6 +26,8 @@ test('init.sh --yes writes a working .env with generated secrets', () => {
   assert.equal(value(r.env, 'ON_CALL_DAYS'), 'FRI,SAT,SUN');
   assert.equal(value(r.env, 'ALLOWED_EMAIL_DOMAINS'), 'example.com');
   assert.equal(value(r.env, 'PUBLIC_URL'), 'http://localhost:3000');
+  assert.equal(value(r.env, 'DATABASE_URL'), 'postgres://pagerdiem:pagerdiem@localhost:5432/pagerdiem', 'PostgreSQL is the default');
+  assert.equal(value(r.env, 'DATABASE_PATH'), undefined, 'no SQLite unless chosen');
   assert.equal((fs.statSync(r.envFile).mode & 0o777).toString(8), '600', 'only the owner can read it');
   const loaded = spawnSync('node', ['--env-file', r.envFile, '-e',
     "import('./src/config.js').then((m) => console.log(JSON.stringify(m.config.coverage)))"], { cwd: root, encoding: 'utf8' });
@@ -92,4 +94,33 @@ test('init.sh leaves the /ping AI check off unless asked, and sets it up when as
 
   const noKey = runInit([], ['', '', '', '', '', '', '', '', '', 'n', 'y', ''].join('\n') + '\n');
   assert.equal(value(noKey.env, 'PING_ENABLED'), 'false', 'no key means it stays off');
+});
+
+test('init.sh never asks about the database: PostgreSQL unless you pass a flag', () => {
+  const r = runInit([], '');
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /Choose|1\)/, 'no database menu');
+  assert.match(r.stdout, /PostgreSQL in Docker/);
+  assert.equal(value(r.env, 'DATABASE_URL'), 'postgres://pagerdiem:pagerdiem@localhost:5432/pagerdiem');
+});
+
+test('init.sh uses your own PostgreSQL with --database-url, and SQLite only with --sqlite', () => {
+  const own = runInit(['--yes', '--database-url', 'postgres://me:secret@db.example.com:5432/pd']);
+  assert.equal(own.status, 0, own.stderr);
+  assert.equal(value(own.env, 'DATABASE_URL'), 'postgres://me:secret@db.example.com:5432/pd');
+  assert.ok(!own.stdout.includes('secret'), 'the password is not printed');
+
+  const bad = runInit(['--yes', '--database-url', 'mysql://nope']);
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stdout + bad.stderr, /not a PostgreSQL URL/);
+
+  const sqlite = runInit(['--yes', '--sqlite']);
+  assert.equal(sqlite.status, 0, sqlite.stderr);
+  assert.match(sqlite.stdout, /SQLite file, as you asked/);
+  assert.equal(value(sqlite.env, 'DATABASE_URL'), '');
+  assert.equal(value(sqlite.env, 'DATABASE_PATH'), 'data/pagerdiem.db');
+
+  const both = runInit(['--sqlite', '--database-url', 'postgres://a@b/c']);
+  assert.notEqual(both.status, 0);
+  assert.match(both.stderr, /either --sqlite or --database-url/);
 });
