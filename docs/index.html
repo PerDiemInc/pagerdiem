@@ -232,9 +232,10 @@ footer .wrap{display:flex;justify-content:space-between;gap:12px 24px;flex-wrap:
       <a class="go" href="https://github.com/PerDiemInc/pagerdiem/blob/main/docs/deploy-aws.md">Read the AWS guide</a></div>
   </div>
   <h3 class="try">Or try it locally in a minute</h3>
+  <p class="sub" style="margin:8px 0 0">The setup script asks for your email domain, time zone and on-call days, makes the secrets for you, and installs everything.</p>
 <pre class="term"><code><span class="c">$</span> git clone https://github.com/PerDiemInc/pagerdiem &amp;&amp; cd pagerdiem
-<span class="c">$</span> cp .env.example .env
-<span class="c">$</span> npm install &amp;&amp; npm start      <span class="c"># http://localhost:3000 (dry-run, no keys needed)</span></code></pre>
+<span class="c">$</span> ./init.sh      <span class="c"># a few questions, then it writes .env and installs</span>
+<span class="c">$</span> npm start      <span class="c"># http://localhost:3000 (Slack runs in dry-run until you add keys)</span></code></pre>
 </div></section>
 </main>
 
