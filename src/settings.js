@@ -1,5 +1,5 @@
-// Settings an admin can change while the app runs. They live in the `settings` table and
-// override the environment defaults.
+// On-call coverage: the environment seeds it, and an admin can change it while the app runs.
+// The saved value lives in the `settings` table and wins over the environment.
 
 export const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -10,7 +10,6 @@ export const PRESETS = {
 };
 
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
-const DOMAIN = /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
 export async function readSetting(db, key) {
   return (await db.get('SELECT value FROM settings WHERE key = ?', [key]))?.value ?? null;
@@ -61,15 +60,6 @@ export function coverageFromEnv(env) {
   });
   if (error) throw new Error(`Coverage settings: ${error}`);
   return coverage;
-}
-
-/** Turn "@example.com, example.org" into a clean list. Returns { domains } or { error }. */
-export function normalizeDomains(text) {
-  const domains = [...new Set(String(text || '').split(/[\s,;]+/).map((d) => d.replace(/^@/, '').trim().toLowerCase()).filter(Boolean))];
-  if (!domains.length) return { error: 'Enter at least one email domain, for example example.com.' };
-  const bad = domains.find((d) => !DOMAIN.test(d));
-  if (bad) return { error: `"${bad}" is not a valid domain. Use something like example.com.` };
-  return { domains };
 }
 
 /** "Fri, Sat, Sun" / "Mon–Fri" style summary of covered days. */

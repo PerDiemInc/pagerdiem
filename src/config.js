@@ -22,6 +22,22 @@ export function parseDayTime(value) {
 
 const isProd = env.NODE_ENV === 'production';
 
+/**
+ * In production, a connected Slack must be pinned to your workspace: without SLACK_TEAM_ID any
+ * workspace holding a valid signature is accepted. ALLOW_ANY_SLACK_WORKSPACE=true opts out.
+ */
+export function slackTeamProblem(source) {
+  const slackOn = Boolean(source.SLACK_BOT_TOKEN || source.SLACK_SIGNING_SECRET);
+  if (source.NODE_ENV === 'production' && slackOn && !source.SLACK_TEAM_ID && source.ALLOW_ANY_SLACK_WORKSPACE !== 'true') {
+    return 'SLACK_TEAM_ID is required in production when Slack is connected (your workspace ID, like T0123456789). Set ALLOW_ANY_SLACK_WORKSPACE=true only if you really want to accept any workspace.';
+  }
+  return null;
+}
+{
+  const problem = slackTeamProblem(env);
+  if (problem) throw new Error(problem);
+}
+
 if (isProd && !env.SESSION_SECRET) {
   throw new Error('SESSION_SECRET is required in production');
 }
@@ -68,6 +84,10 @@ export const config = {
   repageEveryMinutes: int('REPAGE_EVERY_MINUTES', 5),
 
   apiToken: env.API_TOKEN || '',
+
+  // Secret behind the calendar feed link. Change it to revoke every existing link. Defaults to a key
+  // derived from SESSION_SECRET, so old links keep working until you set one.
+  calendarFeedSecret: env.CALENDAR_FEED_SECRET || '',
 
   // Google sign-in. When set, Google (limited to allowedEmailDomains) is the only way in.
   google: {

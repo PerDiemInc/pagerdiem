@@ -10,4 +10,6 @@ Deployment notes:
 - Set the Google OAuth consent screen to **Internal** so only your Workspace can sign in.
 - Set `SLACK_TEAM_ID` so only your Slack workspace can use the slash commands and buttons.
 - Keep secrets (Slack, Google, database) in your host's settings, never in the repository.
-- The calendar feed URL and the WhatsApp group link work for anyone who has them; keep them inside the team.
+- The calendar feed URL and the WhatsApp group link work for anyone who has them; keep them inside the team. Set a new `CALENDAR_FEED_SECRET` to revoke every feed link (for example when someone leaves).
+- With Slack connected in production, set `SLACK_TEAM_ID`; the app won't start without it.
+- The Docker base image and GitHub Actions are pinned by digest and commit SHA; Dependabot proposes updates.

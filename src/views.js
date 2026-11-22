@@ -426,16 +426,9 @@ export function settingsPage({ user, coverage, domains, status, notifications, f
     : `<div class="card"><h2>On-call coverage</h2>
         <p class="small">${esc(describeDays(coverage.days))}, ${esc(coverage.start)} → ${esc(coverage.end)}. ${coverage.weekendCount} on weekend days, ${coverage.weekdayCount} on weekdays.</p>
         <p class="small muted">Ask an admin to change it.</p></div>`;
-  const domainsCard = admin
-    ? `<div class="card"><h2>Workspace</h2>
-        <p class="small muted">Only Google Workspace accounts on these email domains can sign in. Separate several with commas.</p>
-        <form method="post" action="/settings/domains">
-          <label for="domains">Allowed email domains</label>
-          <input id="domains" name="domains" required value="${esc(domains.map((d) => `@${d}`).join(', '))}" placeholder="@example.com">
-          <p class="hint">Your own domain must stay in the list. People already signed in stay signed in.</p>
-          <p style="margin:12px 0 0"><button class="primary">Save domains</button></p>
-        </form></div>`
-    : `<div class="card"><h2>Workspace</h2><p class="small">${domains.length ? domains.map((d) => `@${esc(d)}`).join(', ') : 'Not restricted (local development)'}</p></div>`;
+  const domainsCard = `<div class="card"><h2>Workspace</h2>
+        <p class="small">${domains.length ? `Only ${domains.map((d) => `@${esc(d)}`).join(', ')} accounts can sign in.` : 'Not restricted (local development).'}</p>
+        <p class="small muted">Set by the <code>ALLOWED_EMAIL_DOMAINS</code> environment variable. Change it where the app is deployed and restart.</p></div>`;
   const body = `<h1>Settings</h1>
   <div class="grid">${coverageCard}${domainsCard}</div>
   <div class="grid">
