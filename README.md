@@ -51,12 +51,22 @@ It runs on-prem or in your own cloud account. There is no subscription and no pe
 Requires Node.js 22.13+ (uses the built-in `node:sqlite`).
 
 ```bash
-git clone <this repo> && cd pagerdiem
-cp .env.example .env
-npm install
+git clone https://github.com/PerDiemInc/pagerdiem && cd pagerdiem
+./init.sh          # a few questions, then it writes .env and installs
 npm start          # http://localhost:3000
 npm test
 ```
+
+`./init.sh` asks for your company email domain, time zone, the days that need someone on call and how many people, and (optionally) your Slack details. It generates the session secret and API token for you, saves `.env` readable only by you, runs `npm install` and offers to start the app. Press Enter to accept any default. It never overwrites an existing `.env` unless you pass `--force`.
+
+| Option | |
+|---|---|
+| `--yes` | Accept every default, ask nothing (good for scripts) |
+| `--force` | Replace an existing `.env` |
+| `--no-install` | Skip `npm install` |
+| `--env-file PATH` | Write somewhere other than `.env` |
+
+It needs bash, so on Windows use WSL. Prefer to do it by hand? `cp .env.example .env`, edit it, `npm install`, `npm start`.
 
 Locally, without Google or Slack keys, PagerDiem uses email + password sign-in and runs Slack in
 **dry-run mode**: every message is recorded under **Settings → Recent messages** instead of being
