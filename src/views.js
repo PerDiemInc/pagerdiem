@@ -133,6 +133,7 @@ background:var(--default);color:var(--text);font:inherit;font-weight:500;letter-
 button:hover,.btn:hover{background:var(--default-hover);color:var(--text)}
 button.primary,.btn.primary{background:var(--accent);color:#fff}button.primary:hover,.btn.primary:hover{background:var(--accent-hover)}
 button.danger{background:var(--danger-soft);color:var(--danger-soft-fg)}
+button.danger-solid{background:var(--danger);color:#fff}button.danger-solid:hover{background:var(--danger-hover)}
 button.ghost,.btn.ghost{background:none}button.ghost:hover,.btn.ghost:hover{background:var(--default)}
 button.sm,.btn.sm{height:32px;padding:0 12px}button.icon,.btn.icon{width:32px;height:32px;padding:0}
 button:disabled{opacity:.5;cursor:default}
@@ -148,7 +149,7 @@ form.inline{display:inline-flex;gap:6px;align-items:center;margin:0}form.inline 
 .flash{display:flex;gap:10px;align-items:center;background:var(--surface);border-radius:16px;padding:12px 16px;margin-bottom:16px;box-shadow:inset 0 0 0 1px var(--border)}
 .flash .ic{color:var(--success-soft-fg)}.flash.error .ic{color:var(--danger-soft-fg)}
 .flash .msg{flex:1}
-code{font:12px/16px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--surface-2);padding:2px 6px;border-radius:6px;word-break:break-all}
+code{font:12px/16px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--surface-2);padding:2px 6px;border-radius:6px;overflow-wrap:anywhere}
 .timeline{list-style:none;padding:0;margin:0}.timeline li{padding:10px 0;border-bottom:1px solid var(--sep)}.timeline li:last-child{border-bottom:0}
 .day{font-size:14px;margin:20px 0 4px}.day:first-child{margin-top:0}
 .meta{display:grid;gap:12px 24px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin:16px 0}
@@ -174,6 +175,13 @@ background:hsl(var(--h) 70% var(--oc-l));color:hsl(var(--h) 60% var(--oc-text-l)
 .oc.need{background:var(--danger-soft);color:var(--danger-soft-fg)}
 .swatch{display:inline-block;width:10px;height:10px;border-radius:3px;background:hsl(var(--h) 70% 55%);margin-right:8px}
 @media (max-width:640px){.cal>div{min-height:64px;padding:4px}.oc{font-size:10px;padding:2px 4px}.oc small{display:none}}
+.n-short{display:none}
+@media (max-width:900px){.n-full{display:none}.n-short{display:inline}}
+.weekends .wk{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.3fr) auto;gap:8px 20px;align-items:center;padding:14px 0;border-top:1px solid var(--sep)}
+.weekends .wk:first-child{border-top:0;padding-top:4px}
+.person{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0}
+.person .inline{margin-left:auto}
+@media (max-width:760px){.weekends .wk{grid-template-columns:1fr}.weekends .wk .actions{justify-self:start}}
 `;
 
 // Icons: 24px stroke paths in the style the design system uses (Lucide geometry).
@@ -347,7 +355,7 @@ function selfButton(user, e, back = '', now = new Date()) {
   const hidden = back ? `<input type="hidden" name="back" value="${back}">` : '';
   return on
     ? `<form method="post" action="/weekends/${e.shift.key}/leave" class="inline">${hidden}<button class="sm">Remove me</button></form>`
-    : `<form method="post" action="/weekends/${e.shift.key}/join" class="inline">${hidden}<button class="sm primary">Add me</button></form>`;
+    : `<form method="post" action="/weekends/${e.shift.key}/join" class="inline">${hidden}<button class="${e.needsCover ? 'sm primary' : 'sm'}">Add me</button></form>`;
 }
 
 function peopleCell(e) {
@@ -363,7 +371,7 @@ export function dashboardPage({ user, now, onCall, runningShift, nextEntry, back
   const shown = onCall?.shift ?? runningShift ?? nextEntry?.shift;
   const after = schedule.find((e) => shown && e.shift.start > shown.start);
   const facts = `<dl class="meta">
-    ${shown ? `<div><dt>Shift</dt><dd>${esc(fmt(shown.start))} → ${esc(fmt(shown.end))}</dd></div>` : ''}
+    ${shown ? `<div><dt>Shift</dt><dd>${esc(shiftSpan(shown))}</dd></div>` : ''}
     <div><dt>Backup</dt><dd>${esc(backup?.name || '—')}</dd></div>
     ${after ? `<div><dt>Next weekend</dt><dd>${after.people.length ? names(after.people) : 'Needs cover'}</dd></div>` : ''}
   </dl>`;
@@ -384,7 +392,7 @@ export function dashboardPage({ user, now, onCall, runningShift, nextEntry, back
   const rows = schedule.map((e) => {
     const isNow = onCall && e.shift.key === onCall.shift.key;
     return `<tr class="${isNow ? 'now' : ''}">
-      <td><strong>${esc(formatRange(e.shift, tz))}</strong>${isNow ? ' <span class="pill accent">now</span>' : ''}<div class="t-meta">${esc(fmt(e.shift.start))} → ${esc(fmt(e.shift.end))}</div></td>
+      <td><strong>${esc(formatRange(e.shift, tz))}</strong>${isNow ? ' <span class="pill accent">now</span>' : ''}<div class="t-meta">${esc(shiftSpan(e.shift))}</div></td>
       <td>${peopleCell(e)}</td>
       <td class="actions">${selfButton(user, e, '', now)}</td>
     </tr>`;
@@ -467,7 +475,7 @@ function pageForm({ compact = false } = {}) {
         <div style="flex:1;min-width:0"><label for="page-title" class="sr">What's broken?</label>
           <input id="page-title" name="title" required maxlength="200" placeholder="What's broken? e.g. Checkout failing for all stores">
           <textarea name="details" maxlength="4000" aria-label="Details" placeholder="Details, links, dashboards (optional)" style="margin-top:8px;min-height:36px;height:36px"></textarea></div>
-        <button class="primary">${I.bell} Page now</button>
+        <button class="danger-solid">${I.bell} Page now</button>
       </form>`;
   }
   return `<form method="post" action="/incidents">
@@ -475,7 +483,7 @@ function pageForm({ compact = false } = {}) {
           <input id="page-title" name="title" required maxlength="200" placeholder="e.g. Checkout failing for all stores"></div>
         <div class="field"><label for="page-details">Details</label>
           <textarea id="page-details" name="details" maxlength="4000" placeholder="Links, dashboards, what you've tried (optional)"></textarea></div>
-        <button class="primary" style="width:100%">${I.bell} Page now</button>
+        <button class="danger-solid" style="width:100%">${I.bell} Page now</button>
       </form>`;
 }
 
@@ -518,7 +526,7 @@ export function incidentsPage({ user, incidents, status, stats, now, flash }) {
   return layout({ title: 'Incidents', user, body, flash, active: 'incidents' });
 }
 
-export function incidentPage({ user, inc, events, people, notifications, flash }) {
+export function incidentPage({ user, inc, events, people, notifications, names = {}, flash }) {
   const body = `<p style="margin:0 0 12px"><a class="btn ghost sm" href="/incidents" style="margin-left:-12px">${I.back} All incidents</a></p>
   <div class="card">
     <div class="row" style="justify-content:space-between;align-items:flex-start;gap:16px">
@@ -535,15 +543,36 @@ export function incidentPage({ user, inc, events, people, notifications, flash }
   <div class="grid">
     <div class="card"><h2>Timeline</h2><ul class="timeline">${events.map((e) =>
       `<li><div>${esc(e.message)}</div><div class="t-meta">${esc(fmt(e.at))}</div></li>`).join('')}</ul></div>
-    <div class="card"><h2>Messages sent</h2>${notificationTable(notifications)}</div>
+    <div class="card"><h2>Messages sent</h2>${notificationTable(notifications, names)}</div>
   </div>`;
   return layout({ title: `Incident #${inc.id}`, user, body, flash, active: 'incidents' });
 }
 
-function notificationTable(rows) {
+/** "Fri 6:00 PM → Mon 9:00 AM EST": a shift on one line, with the time zone once. */
+function shiftSpan(shift) {
+  const part = (d) => new Intl.DateTimeFormat('en-US', { timeZone: config.timezone, weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(d);
+  const zone = new Intl.DateTimeFormat('en-US', { timeZone: config.timezone, timeZoneName: 'short' }).formatToParts(shift.start).find((p) => p.type === 'timeZoneName')?.value;
+  return `${part(shift.start)} → ${part(shift.end)}${zone ? ` ${zone}` : ''}`;
+}
+
+/** Slack markup as plain text for the page: names for mentions, no shortcodes, links as their text. */
+export function plainSlack(text, names = {}) {
+  return String(text ?? '')
+    .replace(/<@([UW][A-Z0-9]+)>/g, (_, id) => `@${names[id] || 'someone'}`)
+    .replace(/<!subteam\^[A-Z0-9]+(?:\|([^>]+))?>/g, (_, label) => label || '@group')
+    .replace(/<!(here|channel|everyone)>/g, '@$1')
+    .replace(/<(https?:[^|>]+)\|([^>]+)>/g, '$2')
+    .replace(/<(https?:[^>]+)>/g, '$1')
+    .replace(/:[a-z][a-z0-9_+-]*:\s*/g, '')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    .trim();
+}
+
+function notificationTable(rows, names = {}) {
   if (!rows.length) return '<p class="muted" style="margin:0">None.</p>';
   return `<div class="scroll"><table>${rows.map((n) => `<tr>
-    <td><strong>${esc(n.channel)}</strong> <span class="muted">→ ${esc(n.recipient)}</span><div class="t-meta">${esc(n.body.slice(0, 140))}${n.body.length > 140 ? '…' : ''}</div>
+    <td><strong>${esc(n.channel)}</strong> <span class="muted">→ ${esc(n.recipient)}</span><div class="t-meta">${esc(plainSlack(n.body, names).slice(0, 200))}${plainSlack(n.body, names).length > 200 ? '…' : ''}</div>
       ${n.error ? `<div class="t-meta" style="color:var(--danger-soft-fg)">${esc(n.error)}</div>` : ''}</td>
     <td class="actions"><span class="pill ${esc(n.status)}">${esc(n.status)}</span><div class="t-meta">${esc(fmt(n.at))}</div></td></tr>`).join('')}</table></div>`;
 }
@@ -606,7 +635,7 @@ export function settingsPage({ user, coverage, domains, ping, status, notificati
         <p class="muted">Which days need someone on call. Consecutive days form one shift: it starts at the start time on its first day and ends at the end time the morning after its last day. Changes apply to the calendar and rotation right away.</p>
         <form method="post" action="/settings/coverage">
           <div class="row" style="gap:4px 16px;margin:16px 0">${dayBoxes}</div>
-          <div class="fields">
+          <div class="fields" style="grid-template-columns:repeat(2,minmax(0,1fr))">
             <div class="field"><label for="start">Shift starts</label><input id="start" name="start" type="time" required value="${esc(coverage.start)}"></div>
             <div class="field"><label for="end">Shift ends</label><input id="end" name="end" type="time" required value="${esc(coverage.end)}"></div>
             <div class="field"><label for="weekend_count">People on weekend days</label><input id="weekend_count" name="weekend_count" type="number" min="1" max="10" required value="${coverage.weekendCount}"></div>
@@ -636,7 +665,7 @@ export function settingsPage({ user, coverage, domains, ping, status, notificati
   <div class="grid">
     <div class="card"><div class="card-head"><h2>Slack</h2>${yes(status.slack, 'Dry run')}</div>
       <p>On-call channel: ${config.slack.channel ? `<code>${esc(config.slack.channel)}</code>` : '<span class="muted">not set</span>'}</p>
-      <p>Slash commands (point both at the same URL): <code>/oncall</code>, <code>/page</code> → ${url('/slack/commands')}</p>
+      <p>Slash commands (point both at the same URL): <code>/oncall</code>, <code>/page</code>, <code>/ping</code> → ${url('/slack/commands')}</p>
       <p>Interactivity request URL (Acknowledge / Resolve buttons): ${url('/slack/interactions')}</p>
       <p class="small muted" style="margin:0">Bot scopes: chat:write, users:read, users:read.email, im:write, commands.</p></div>
     <div class="card"><div class="card-head"><h2>Alerts API</h2>${yes(status.api, 'Disabled')}</div>
@@ -677,7 +706,7 @@ export function calendarPage({ user, grid, prevMonth, nextMonth, thisMonth, feed
   const chipsFor = ({ entry: e, isStart, isEnd }) => {
     const when = isStart ? `<small>from ${esc(timeOf(e.shift.start))}</small>` : isEnd ? `<small>until ${esc(timeOf(e.shift.end))}</small>` : '';
     return e.people.length
-      ? e.people.map((p, i) => `<span class="oc" style="--h:${hue(p.id)}" title="${esc(p.name)} on call">${esc(p.name)}${i === e.people.length - 1 ? when : ''}</span>`).join('')
+      ? e.people.map((p, i) => `<span class="oc" style="--h:${hue(p.id)}" title="${esc(p.name)} on call"><span class="n-full">${esc(p.name)}</span><span class="n-short">${esc(p.name.split(' ')[0])}</span>${i === e.people.length - 1 ? when : ''}</span>`).join('')
         + (e.needsCover ? '<span class="oc need">needs cover</span>' : '')
       : `<span class="oc need">needs cover${when}</span>`;
   };
@@ -685,11 +714,11 @@ export function calendarPage({ user, grid, prevMonth, nextMonth, thisMonth, feed
     `<div class="${d.inMonth ? '' : 'out'} ${d.today ? 'today' : ''}"><span class="num">${d.day}</span>${d.items.map(chipsFor).join('')}</div>`).join('');
 
   const list = grid.entries.length
-    ? `<table>${grid.entries.map((e) => `<tr>
-        <td><strong>${esc(formatRange(e.shift, tz))}</strong><div class="t-meta">${esc(fmt(e.shift.start))} → ${esc(fmt(e.shift.end))}</div></td>
-        <td>${e.people.map((p) => `<div class="row" style="margin:4px 0"><span><span class="swatch" style="--h:${hue(p.id)}"></span>${esc(p.name)}</span>${personAction(user, e, p)}</div>`).join('') || '<span class="muted">Nobody</span>'}
-          ${e.needsCover ? `<span class="pill open">needs ${e.shift.count - e.people.length} more</span>` : ''}</td>
-        <td class="actions">${e.people.some((p) => p.id === user.id) ? '' : selfButton(user, e, 'calendar')}</td></tr>`).join('')}</table>`
+    ? `<div class="weekends">${grid.entries.map((e) => `<div class="wk">
+        <div><strong>${esc(formatRange(e.shift, tz))}</strong><div class="t-meta">${esc(shiftSpan(e.shift))}</div></div>
+        <div>${e.people.map((p) => `<div class="person"><span class="swatch" style="--h:${hue(p.id)}"></span><span>${esc(p.name)}</span>${personAction(user, e, p)}</div>`).join('') || '<span class="muted">Nobody</span>'}
+          ${e.needsCover ? `<span class="pill open">needs ${e.shift.count - e.people.length} more</span>` : ''}</div>
+        <div class="actions">${e.people.some((p) => p.id === user.id) ? '' : selfButton(user, e, 'calendar')}</div></div>`).join('')}</div>`
     : '<p class="muted" style="margin:0">No weekends scheduled this month yet.</p>';
 
   const googleAdd = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(feedUrl.replace(/^https?:/, 'webcal:'))}`;

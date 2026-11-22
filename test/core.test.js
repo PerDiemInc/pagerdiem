@@ -9,6 +9,7 @@ process.env.REPAGE_EVERY_MINUTES = '5';
 
 const { config, slackTeamProblem, databaseProblem, LOCAL_POSTGRES } = await import('../src/config.js');
 const { feedToken } = await import('../src/calendar.js');
+const { plainSlack } = await import('../src/views.js');
 const { makeShifts } = await import('../src/time.js');
 const { normalizeCoverage, describeDays, coverageFromEnv } = await import('../src/settings.js');
 const { freshDb } = await import('./helpers.js');
@@ -737,4 +738,27 @@ test('PostgreSQL is the default database; SQLite is an explicit choice; producti
   assert.equal(databaseProblem({ NODE_ENV: 'production', DATABASE_PATH: '/data/x.db' }), null, 'SQLite is possible, but only on purpose');
   assert.match(LOCAL_POSTGRES, /^postgres:\/\/pagerdiem:pagerdiem@localhost:5432\/pagerdiem$/);
   assert.equal(config.database.startsWith('postgres'), process.env.DATABASE_PATH ? false : true, 'with nothing set the app targets PostgreSQL');
+});
+
+test('Slack markup in the incident page becomes plain text with real names', () => {
+  const names = { U0ALEX1234: 'Alex Kim' };
+  assert.equal(
+    plainSlack(':rotating_light: *Incident #1: Checkout 502s* p95 &gt; 4s &amp; rising. Paging <@U0ALEX1234> and <@UUNKNOWN01> <!here> <!subteam^S0ENG0000> <https://x.example/i/1|the incident> <https://y.example/z>', names),
+    'Incident #1: Checkout 502s p95 > 4s & rising. Paging @Alex Kim and @someone @here @group the incident https://y.example/z');
+  assert.equal(plainSlack('10:30:45 ack by ben :eyes:'), '10:30:45 ack by ben', 'times are not mistaken for shortcodes');
+  assert.equal(plainSlack(null), '');
+});
+
+test('the most urgent incidents come first: open, then acknowledged, then resolved', async () => {
+  const { db, rotation, notify, addUser } = await setup();
+  const ana = await addUser('Ana');
+  const incidents = makeIncidents({ db, rotation, notify });
+  const at0 = at('2026-11-18T15:00:00Z');
+  const first = await incidents.create({ title: 'First, still open' }, at0);
+  const second = await incidents.create({ title: 'Second, acknowledged' }, new Date(at0.getTime() + 60_000));
+  const third = await incidents.create({ title: 'Third, resolved' }, new Date(at0.getTime() + 120_000));
+  const fourth = await incidents.create({ title: 'Fourth, open' }, new Date(at0.getTime() + 180_000));
+  await incidents.acknowledge(second.id, ana);
+  await incidents.resolve(third.id, ana);
+  assert.deepEqual((await incidents.list()).map((i) => i.id), [fourth.id, first.id, second.id, third.id]);
 });

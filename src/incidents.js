@@ -249,7 +249,7 @@ export function makeIncidents({ db, rotation, notify }) {
       LEFT JOIN users k ON k.id = i.acked_by
       LEFT JOIN users r ON r.id = i.resolved_by
       ${status ? 'WHERE i.status = ?' : ''}
-      ORDER BY CASE WHEN i.status = 'resolved' THEN 1 ELSE 0 END, i.id DESC LIMIT ?`, status ? [status, limit] : [limit]));
+      ORDER BY CASE i.status WHEN 'open' THEN 0 WHEN 'acknowledged' THEN 1 ELSE 2 END, i.id DESC LIMIT ?`, status ? [status, limit] : [limit]));
   }
 
   /** Counts per status, plus incidents and the median wait for an acknowledgement over the last 30 days. */

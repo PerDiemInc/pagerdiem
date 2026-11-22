@@ -417,6 +417,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
       user: ctx.user, inc, events: (await incidents.events(inc.id)),
       people: { assigned: (await rotation.userById(inc.assigned_user_id)), backup: (await rotation.userById(inc.backup_user_id)) },
       notifications: (await db.all('SELECT * FROM notifications WHERE incident_id = ? ORDER BY id DESC', [inc.id])),
+      names: Object.fromEntries((await db.all('SELECT slack_user_id, name FROM users WHERE slack_user_id IS NOT NULL')).map((u) => [u.slack_user_id, u.name])),
       flash: takeFlash(ctx),
     }));
   });
