@@ -17,6 +17,11 @@ features:
       url: https://YOUR-APP.example.com/slack/commands
       description: Who's on call now and the next weekends
       should_escape: false
+    - command: /ping
+      url: https://YOUR-APP.example.com/slack/commands
+      description: Ask the AI check to look into a problem (off unless enabled)
+      usage_hint: "[what looks wrong]"
+      should_escape: false
     - command: /page
       url: https://YOUR-APP.example.com/slack/commands
       description: Page whoever is on call

@@ -26,6 +26,17 @@ const isProd = env.NODE_ENV === 'production';
  * In production, a connected Slack must be pinned to your workspace: without SLACK_TEAM_ID any
  * workspace holding a valid signature is accepted. ALLOW_ANY_SLACK_WORKSPACE=true opts out.
  */
+/** The /ping AI check is off unless PING_ENABLED=true, and then it needs a Claude API key or a routine. */
+export function pingProblem(source) {
+  if (source.PING_ENABLED !== 'true') return null;
+  const api = Boolean(source.ANTHROPIC_API_KEY);
+  const routine = Boolean(source.PING_ROUTINE_URL && source.PING_ROUTINE_TOKEN);
+  if (!api && !routine) {
+    return 'PING_ENABLED=true needs ANTHROPIC_API_KEY (your Claude API key) or PING_ROUTINE_URL with PING_ROUTINE_TOKEN.';
+  }
+  return null;
+}
+
 export function slackTeamProblem(source) {
   const slackOn = Boolean(source.SLACK_BOT_TOKEN || source.SLACK_SIGNING_SECRET);
   if (source.NODE_ENV === 'production' && slackOn && !source.SLACK_TEAM_ID && source.ALLOW_ANY_SLACK_WORKSPACE !== 'true') {
@@ -34,7 +45,7 @@ export function slackTeamProblem(source) {
   return null;
 }
 {
-  const problem = slackTeamProblem(env);
+  const problem = slackTeamProblem(env) || pingProblem(env);
   if (problem) throw new Error(problem);
 }
 
@@ -84,6 +95,19 @@ export const config = {
   repageEveryMinutes: int('REPAGE_EVERY_MINUTES', 5),
 
   apiToken: env.API_TOKEN || '',
+
+  // Optional AI check behind the /ping Slack command. Off by default.
+  ping: {
+    enabled: env.PING_ENABLED === 'true',
+    anthropicKey: env.ANTHROPIC_API_KEY || '',
+    model: env.PING_MODEL || 'claude-sonnet-5-5',
+    skillFile: env.PING_SKILL_FILE || 'skills/ping.md',
+    cooldownSeconds: int('PING_COOLDOWN_SECONDS', 120),
+    maxPerDay: int('PING_MAX_PER_DAY', 30),
+    checkUrls: (env.PING_CHECK_URLS || '').split(',').map((u) => u.trim()).filter(Boolean),
+    routineUrl: env.PING_ROUTINE_URL || '',
+    routineToken: env.PING_ROUTINE_TOKEN || '',
+  },
 
   // Secret behind the calendar feed link. Change it to revoke every existing link. Defaults to a key
   // derived from SESSION_SECRET, so old links keep working until you set one.

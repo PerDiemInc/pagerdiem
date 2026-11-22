@@ -218,6 +218,30 @@ test('admins set the on-call days and counts from Settings, and the sign-in doma
   }
 });
 
+test('/ping is refused while off, and for people who are not engineers or admins', async () => {
+  const signed = (body) => {
+    const ts = String(Math.floor(Date.now() / 1000));
+    const sig = 'v0=' + crypto.createHmac('sha256', 'slack-secret').update(`v0:${ts}:${body}`).digest('hex');
+    return { 'x-slack-request-timestamp': ts, 'x-slack-signature': sig };
+  };
+  const ping = async (slackUser) => {
+    const body = form({ command: '/ping', text: 'checkout failing', user_id: slackUser, channel_id: 'C0123456789' });
+    const res = await post('/slack/commands', body, signed(body));
+    assert.equal(res.status, 200);
+    return (await res.json()).text;
+  };
+  assert.match(await ping('U0ANA12345'), /turned off/, 'off by default, even for an admin');
+  const saved = { ...config.ping };
+  Object.assign(config.ping, { enabled: true, anthropicKey: 'sk-test', cooldownSeconds: 0 });
+  try {
+    assert.match(await ping('UGUEST0001'), /Only engineers and admins/, 'unknown Slack user');
+    await app.db.run("UPDATE users SET role = 'non_technical' WHERE email = 'ben@example.com'");
+    assert.match(await ping('U0BEN12345'), /Only engineers and admins/, 'non-technical person');
+  } finally {
+    Object.assign(config.ping, saved);
+  }
+});
+
 test('login rejects a wrong password and accepts the right one', async () => {
   let res = await post('/login', form({ email: 'ana@example.com', password: 'nope' }));
   assert.equal(res.status, 400);

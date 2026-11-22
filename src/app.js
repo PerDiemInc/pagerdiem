@@ -9,7 +9,8 @@ import { makeRotation } from './rotation.js';
 import { makeNotifier } from './notify/index.js';
 import { makeIncidents } from './incidents.js';
 import { makeScheduler } from './scheduler.js';
-import { lookupUserIdByEmail, verifySlackSignature, mention, slackText } from './notify/slack.js';
+import { makePing } from './ping.js';
+import { lookupUserIdByEmail, verifySlackSignature, mention, slackText, postMessage as slackPost } from './notify/slack.js';
 import { normalizePhone } from './phone.js';
 import {
   hashPassword, verifyPassword, sessionCookie, clearSessionCookie, sessionUserId, parseCookies, safeEqual,
@@ -25,12 +26,13 @@ const safeBack = (value, fallback) => (/^\/(?![/\\])[^\r\n\\]*$/.test(String(val
 const SLACK_ID = /^[UW][A-Z0-9]{6,}$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export function createApp({ db, notifierOverrides } = {}) {
+export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   const shifts = makeShifts(config);
   const rotation = makeRotation(db, shifts);
   const notify = makeNotifier(db, notifierOverrides);
   const incidents = makeIncidents({ db, rotation, notify });
   const scheduler = makeScheduler({ db, shifts, rotation, notify, incidents });
+  const ping = makePing({ db, rotation, post: pingPost ?? slackPost, fetchImpl: pingFetch });
   const router = makeRouter();
   const fmt = (d) => formatLocal(d, config.timezone);
 
@@ -579,7 +581,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     if (!requireUser(ctx)) return;
     requireResponder(ctx);
     ctx.r.html(views.settingsPage({
-      user: ctx.user, coverage: shifts.coverage(), domains: config.allowedEmailDomains,
+      user: ctx.user, coverage: shifts.coverage(), domains: config.allowedEmailDomains, ping: ping.status(),
       status: { slack: slackEnabled(), api: Boolean(config.apiToken) },
       notifications: (await db.all('SELECT * FROM notifications ORDER BY id DESC LIMIT 30')),
       flash: takeFlash(ctx),
@@ -633,6 +635,14 @@ export function createApp({ db, notifierOverrides } = {}) {
         response_type: 'in_channel',
         text: onCall?.people.length ? `:rotating_light: Paging ${onCall.people.map(mention).join(' and ')}: *${slackText(what)}*` : `:rotating_light: *${slackText(what)}* — nobody is on call, alerting the channel.`,
       });
+    }
+    if (command === '/ping') {
+      const verdict = ping.accept({ user: await userBySlack(slackUser) });
+      if (!verdict.ok) return ctx.r.json({ response_type: 'ephemeral', text: verdict.message });
+      const asker = await userBySlack(slackUser);
+      ping.run({ text, channel: ctx.body.channel_id, user: asker, responseUrl: ctx.body.response_url })
+        .catch((err) => console.error('slack /ping failed:', err.message));
+      return ctx.r.json({ response_type: 'ephemeral', text: ':mag: On it. I will reply in a thread when I have something.' });
     }
     return ctx.r.json({ response_type: 'ephemeral', text: (await onCallSummary()) });
   });
@@ -761,5 +771,5 @@ export function createApp({ db, notifierOverrides } = {}) {
     checkSwapsUntil ??= now.getTime();
     if (now.getTime() <= checkSwapsUntil) await announceSwaps(now);
   });
-  return { server, scheduler, rotation, loadSettings, announceSwaps, incidents, shifts, relinkSlackUsers, db };
+  return { server, scheduler, rotation, ping, loadSettings, announceSwaps, incidents, shifts, relinkSlackUsers, db };
 }

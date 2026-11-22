@@ -121,6 +121,13 @@ is_tz()    { node -e 'new Intl.DateTimeFormat("en-US",{timeZone:process.argv[1]}
 is_bot()   { [[ "$1" =~ ^xoxb-[A-Za-z0-9-]+$ ]] || { say "  A bot token starts with xoxb-"; return 1; }; }
 is_chan()  { [[ "$1" =~ ^[CG][A-Z0-9]{7,}$ ]] || { say "  A channel ID looks like C0123456789."; return 1; }; }
 is_team()  { [[ "$1" =~ ^T[A-Z0-9]{6,}$ ]] || { say "  A workspace ID looks like T0123456789."; return 1; }; }
+is_claude_key() { [[ "$1" =~ ^sk-ant-[A-Za-z0-9_-]+$ ]] || { say "  A Claude API key starts with sk-ant-"; return 1; }; }
+is_urls() {
+  local u
+  for u in $(printf '%s' "$1" | tr ',' ' '); do
+    [[ "$u" =~ ^https?://[^[:space:]]+$ ]] || { say "  \"$u\" is not a URL. Use https://example.com/health"; return 1; }
+  done
+}
 is_group() { [[ "$1" =~ ^S[A-Z0-9]{6,}$ ]] || { say "  A user group ID looks like S0123456789."; return 1; }; }
 
 say "${BOLD}PagerDiem local setup${RESET}"
@@ -152,6 +159,19 @@ if confirm "Connect Slack now?" n; then
   ask TEAMID_V "Slack workspace ID (T0123456789)" "" is_team
   ask GROUP_V "User group ID to tag, like @engineers (optional)" "" is_group
   say "${DIM}Slack can only reach this machine through a public URL (for example a tunnel).${RESET}"
+fi
+
+PING_ON=0
+KEY_V=""; SKILL_V="skills/ping.md"; URLS_V=""
+step "/ping AI check (optional, off by default)"
+say "${DIM}Lets engineers type /ping in Slack so an AI looks into a problem and replies. Needs your own Claude API key.${RESET}"
+if confirm "Enable the /ping AI check?" n; then
+  PING_ON=1
+  ask_secret KEY_V "Claude API key (sk-ant-...)" is_claude_key
+  ask SKILL_V "Skill file with your instructions" "skills/ping.md" plain
+  ask URLS_V "Health URLs to check, comma-separated (optional)" "" is_urls
+  [ -f "$SKILL_V" ] || say "${DIM}Note: $SKILL_V does not exist yet; a short default is used until you create it.${RESET}"
+  [ -n "$KEY_V" ] || { say "No key given, so /ping stays off. Set ANTHROPIC_API_KEY later and PING_ENABLED=true."; PING_ON=0; }
 fi
 
 # ---------- write .env ----------
@@ -198,6 +218,12 @@ if [ "$SLACK_ON" = 1 ]; then
   set_var SLACK_ONCALL_CHANNEL_NAME "$CHAN_NAME_V"
   [ -z "$TEAMID_V" ] || set_var SLACK_TEAM_ID "$TEAMID_V"
   [ -z "$GROUP_V" ] || set_var SLACK_ENGINEERS_GROUP_ID "$GROUP_V"
+fi
+if [ "$PING_ON" = 1 ]; then
+  set_var PING_ENABLED true
+  set_var ANTHROPIC_API_KEY "$KEY_V"
+  set_var PING_SKILL_FILE "$SKILL_V"
+  [ -z "$URLS_V" ] || set_var PING_CHECK_URLS "$(printf '%s' "$URLS_V" | tr -d ' ')"
 fi
 say "${GREEN}Saved${RESET} $ENV_FILE ${DIM}(only you can read it, and git ignores it)${RESET}"
 

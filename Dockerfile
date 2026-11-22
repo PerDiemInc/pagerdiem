@@ -4,6 +4,7 @@ ENV NODE_ENV=production DATABASE_PATH=/data/pagerdiem.db
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
+COPY skills ./skills
 # Optional extra CA certificates (e.g. the Amazon RDS bundle); see certs/README.md.
 COPY certs ./certs
 RUN mkdir -p /data && chown node:node /data
