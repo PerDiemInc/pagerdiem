@@ -91,6 +91,7 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | production | Google OAuth client (Web application). Without them, production lets nobody in. |
 | `DATABASE_URL` | production | Postgres connection string. Without it, a local SQLite file is used. |
 | `SESSION_SECRET` | production | Long random string (signs sessions; also derives the calendar feed link unless `CALENDAR_FEED_SECRET` is set) |
+| `PING_ENABLED` | | Default `false`. Turns on the optional `/ping` AI check; also needs `ANTHROPIC_API_KEY` or a routine. See [docs/ping.md](docs/ping.md). |
 | `CALENDAR_FEED_SECRET` | | Secret behind the calendar feed link. Change it to revoke every existing link without logging anyone out. |
 | `PUBLIC_URL` | | The app's public URL. Set automatically on Render. |
 | `TEAM_NAME`, `APP_NAME` | | Shown on the sign-in page and calendar feed |
@@ -110,7 +111,7 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 
 ## Using it
 
-- **Slack:** `/oncall` shows who's on call now and the next weekends. `/page checkout is down` pages them.
+- **Slack:** `/oncall` shows who's on call now and the next weekends. `/page checkout is down` pages them. Optional `/ping checkout is failing` asks an AI to look into it and reply in a thread (off by default; bring your own Claude API key and skill, see [docs/ping.md](docs/ping.md)).
 - **API:**
 
   ```bash

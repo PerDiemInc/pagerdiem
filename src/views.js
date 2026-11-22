@@ -589,7 +589,7 @@ export function teamPage({ user, members, inactive, role = '', flash }) {
   return layout({ title: 'Team', user, body, flash, active: 'team' });
 }
 
-export function settingsPage({ user, coverage, domains, status, notifications, flash }) {
+export function settingsPage({ user, coverage, domains, ping, status, notifications, flash }) {
   const admin = isAdmin(user);
   const yes = (ok, label) => `<span class="pill ${ok ? 'sent' : 'dry-run'}">${ok ? 'Connected' : label}</span>`;
   const url = (p) => `<code>${esc(config.publicUrl + p)}</code>`;
@@ -623,8 +623,16 @@ export function settingsPage({ user, coverage, domains, status, notifications, f
   const domainsCard = `<div class="card"><h2>Workspace</h2>
         <p>${domains.length ? `Only ${domains.map((d) => `@${esc(d)}`).join(', ')} accounts can sign in.` : 'Not restricted (local development).'}</p>
         <p class="small muted" style="margin:0">Set by the <code>ALLOWED_EMAIL_DOMAINS</code> environment variable. Change it where the app is deployed and restart.</p></div>`;
+  const pingCard = `<div class="card"><div class="card-head"><h2>/ping AI check</h2>${ping.mode === 'off' ? '<span class="pill dry-run">Off</span>' : `<span class="pill sent">${esc(ping.mode)}</span>`}</div>
+        ${ping.mode === 'off'
+    ? '<p>Off. Set <code>PING_ENABLED=true</code> with <code>ANTHROPIC_API_KEY</code> (or a routine) to let engineers run <code>/ping</code> in Slack.</p>'
+    : ping.mode === 'api'
+      ? `<p>Runs on the Claude API (<code>${esc(ping.model)}</code>) with your skill file <code>${esc(ping.skillFile)}</code>${ping.skillFound ? '' : ' <span class="pill failed">not found, using a short default</span>'}. ${ping.checkUrls} health URL${ping.checkUrls === 1 ? '' : 's'} probed.</p>`
+      : '<p>Hands each request to your Claude Code routine, which replies in the thread.</p>'}
+        <p class="small muted" style="margin:0">Engineers and admins only. One check every ${ping.cooldownSeconds} s, at most ${ping.maxPerDay} a day. Configured by environment variables, see docs/ping.md.</p></div>`;
   const body = `<div class="head"><div><h1>Settings</h1><p class="sub">How ${esc(config.appName)} reaches people, and how alerts get in.</p></div></div>
   <div class="split">${coverageCard}${domainsCard}</div>
+  <div class="grid">${pingCard}</div>
   <div class="grid">
     <div class="card"><div class="card-head"><h2>Slack</h2>${yes(status.slack, 'Dry run')}</div>
       <p>On-call channel: ${config.slack.channel ? `<code>${esc(config.slack.channel)}</code>` : '<span class="muted">not set</span>'}</p>

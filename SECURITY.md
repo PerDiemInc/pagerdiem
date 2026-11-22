@@ -12,4 +12,5 @@ Deployment notes:
 - Keep secrets (Slack, Google, database) in your host's settings, never in the repository.
 - The calendar feed URL and the WhatsApp group link work for anyone who has them; keep them inside the team. Set a new `CALENDAR_FEED_SECRET` to revoke every feed link (for example when someone leaves).
 - With Slack connected in production, set `SLACK_TEAM_ID`; the app won't start without it.
+- The optional `/ping` AI check is off by default, limited to engineers and admins, rate-limited, and treats what people type as untrusted. See docs/ping.md.
 - The Docker base image and GitHub Actions are pinned by digest and commit SHA; Dependabot proposes updates.

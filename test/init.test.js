@@ -75,3 +75,21 @@ test('init.sh never replaces an existing .env without --force', () => {
   assert.equal(forced.status, 0, forced.stderr);
   assert.match(fs.readFileSync(first.envFile, 'utf8'), /^SESSION_SECRET=[0-9a-f]{64}$/m);
 });
+
+test('init.sh leaves the /ping AI check off unless asked, and sets it up when asked', () => {
+  const off = runInit(['--yes']);
+  assert.equal(value(off.env, 'PING_ENABLED'), 'false');
+  assert.equal(value(off.env, 'ANTHROPIC_API_KEY'), '');
+
+  const answers = ['', '', '', '', '', '', '', '', '', 'n', 'y', 'sk-ant-test-key-123', '', 'https://api.example.com/health, https://web.example.com/up'];
+  const on = runInit([], answers.join('\n') + '\n');
+  assert.equal(on.status, 0, on.stderr);
+  assert.equal(value(on.env, 'PING_ENABLED'), 'true');
+  assert.equal(value(on.env, 'ANTHROPIC_API_KEY'), 'sk-ant-test-key-123');
+  assert.equal(value(on.env, 'PING_SKILL_FILE'), 'skills/ping.md');
+  assert.equal(value(on.env, 'PING_CHECK_URLS'), 'https://api.example.com/health,https://web.example.com/up');
+  assert.ok(!on.stdout.includes('sk-ant-test-key-123'), 'the key is not echoed');
+
+  const noKey = runInit([], ['', '', '', '', '', '', '', '', '', 'n', 'y', ''].join('\n') + '\n');
+  assert.equal(value(noKey.env, 'PING_ENABLED'), 'false', 'no key means it stays off');
+});

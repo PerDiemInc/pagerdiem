@@ -34,6 +34,8 @@ services:
         value: FRI 18:00
       - key: SHIFT_END
         value: MON 09:00
+      - key: PING_ENABLED          # the /ping AI check is off unless this is true (see docs/ping.md)
+        value: "false"
       - key: CALENDAR_FEED_SECRET  # optional: change it to revoke every calendar feed link (openssl rand -hex 24)
         sync: false
       - key: SLACK_BOT_TOKEN       # Slack app: OAuth & Permissions -> Bot User OAuth Token

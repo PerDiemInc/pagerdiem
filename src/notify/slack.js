@@ -18,8 +18,8 @@ async function slackApi(method, body) {
 }
 
 /** Post to a channel ID, or to a user ID (Slack opens the DM with the bot). */
-export function postMessage(channel, text, blocks) {
-  return slackApi('chat.postMessage', { channel, text, blocks, unfurl_links: false });
+export function postMessage(channel, text, blocks, threadTs) {
+  return slackApi('chat.postMessage', { channel, text, blocks, thread_ts: threadTs, unfurl_links: false });
 }
 
 /** Find a Slack member ID from their Slack email. Returns null if not found. */
