@@ -694,3 +694,38 @@ test('the calendar feed link can be revoked with CALENDAR_FEED_SECRET without to
     config.calendarFeedSecret = original;
   }
 });
+
+test('incident stats count each status and the median wait for an acknowledgement over 30 days', async () => {
+  const { db, rotation, notify, addUsers } = await setup();
+  const [ana] = await addUsers('Ana', 'Ben', 'Cal');
+  const incidents = makeIncidents({ db, rotation, notify });
+  const now = at('2026-11-21T15:00:00Z');
+  const minutes = (m) => new Date(now.getTime() - m * 60_000);
+
+  const old = await incidents.create({ title: 'Last month' }, at('2026-10-01T15:00:00Z'));
+  await incidents.acknowledge(old.id, ana, 'web', at('2026-10-01T17:00:00Z'));
+  const a = await incidents.create({ title: 'Acked in 4 min' }, minutes(60));
+  await incidents.acknowledge(a.id, ana, 'web', minutes(56));
+  const b = await incidents.create({ title: 'Resolved in 10 min' }, minutes(50));
+  await incidents.resolve(b.id, ana, 'web', minutes(40));
+  const c = await incidents.create({ title: 'Acked in 6 min' }, minutes(30));
+  await incidents.acknowledge(c.id, ana, 'web', minutes(24));
+  await incidents.create({ title: 'Still open' }, minutes(5));
+
+  assert.deepEqual(await incidents.stats(now), {
+    open: 1, acknowledged: 3, resolved: 1, last30Days: 4, medianAckMinutes: 6,
+  });
+});
+
+test('incident list can be narrowed to one status', async () => {
+  const { db, rotation, notify, addUsers } = await setup();
+  const [ana] = await addUsers('Ana', 'Ben');
+  const incidents = makeIncidents({ db, rotation, notify });
+  const t = at('2026-11-21T15:00:00Z');
+  const one = await incidents.create({ title: 'One' }, t);
+  await incidents.create({ title: 'Two' }, t);
+  await incidents.acknowledge(one.id, ana, 'web', t);
+  assert.deepEqual((await incidents.list({ status: 'open' })).map((i) => i.title), ['Two']);
+  assert.deepEqual((await incidents.list({ status: 'acknowledged' })).map((i) => i.title), ['One']);
+  assert.equal((await incidents.list()).length, 2);
+});
