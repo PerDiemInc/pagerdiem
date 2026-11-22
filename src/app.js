@@ -17,7 +17,7 @@ import {
 } from './auth.js';
 import { HttpError, readBody, parseBody, makeResponder, makeRouter } from './http.js';
 import * as views from './views.js';
-import { PRESETS, normalizeCoverage, normalizeDomains, readSetting, writeSetting, describeDays } from './settings.js';
+import { PRESETS, normalizeCoverage, readSetting, writeSetting, describeDays } from './settings.js';
 import { DEFAULT_ROLE, isRole, isAdmin, isResponder } from './roles.js';
 
 const cleanName = (value) => String(value || '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -535,7 +535,7 @@ export function createApp({ db, notifierOverrides } = {}) {
     ctx.r.redirect('/settings');
   });
 
-  /** Load what admins saved in Settings (coverage, sign-in domains). Call once at startup. */
+  /** Load the coverage an admin saved in Settings. Call once at startup. */
   async function loadSettings() {
     const saved = await readSetting(db, 'coverage');
     if (saved) {
@@ -546,8 +546,6 @@ export function createApp({ db, notifierOverrides } = {}) {
         console.error('ignoring saved coverage:', err.message);
       }
     }
-    const domains = await readSetting(db, 'allowed_domains');
-    if (domains) config.allowedEmailDomains = domains.split(',').filter(Boolean);
   }
 
   router.post('/settings/coverage', async (ctx) => {
@@ -570,22 +568,6 @@ export function createApp({ db, notifierOverrides } = {}) {
         `${coverage.weekendCount} on weekend days and ${coverage.weekdayCount} on weekdays.`,
     });
     setFlash(ctx.r, 'ok', 'On-call coverage saved. The calendar and rotation now follow it.');
-    ctx.r.redirect('/settings');
-  });
-
-  router.post('/settings/domains', async (ctx) => {
-    if (!requireUser(ctx)) return;
-    requireAdmin(ctx);
-    const { domains, error } = normalizeDomains(ctx.body.domains);
-    const own = ctx.user.email.split('@')[1];
-    const problem = error || (domains.includes(own) ? null : `Keep your own domain (@${own}) in the list, or you would lock yourself out.`);
-    if (problem) {
-      setFlash(ctx.r, 'error', problem);
-      return ctx.r.redirect('/settings');
-    }
-    await writeSetting(db, 'allowed_domains', domains.join(','));
-    config.allowedEmailDomains = domains;
-    setFlash(ctx.r, 'ok', `Only ${domains.map((d) => `@${d}`).join(', ')} accounts can sign in now. People already signed in stay signed in.`);
     ctx.r.redirect('/settings');
   });
 

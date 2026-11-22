@@ -9,7 +9,7 @@
   "containerDefinitions": [
     {
       "name": "pagerdiem",
-      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/pagerdiem:latest",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/pagerdiem:GIT_SHA",
       "essential": true,
       "portMappings": [{ "containerPort": 3000, "protocol": "tcp" }],
       "environment": [

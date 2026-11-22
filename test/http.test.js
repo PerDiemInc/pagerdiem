@@ -170,7 +170,7 @@ test('hardening: bad URLs and cookies, redirects, cross-site posts, Slack guests
   await app.db.run("UPDATE users SET name = 'Ana Admin' WHERE id = ?", [anaRow.id]);
 });
 
-test('admins set the on-call days, counts and sign-in domains from Settings', async () => {
+test('admins set the on-call days and counts from Settings, and the sign-in domain comes from the environment', async () => {
   const login = async (email) => cookieOf(await post('/login', form({ email, password: 'longenough123' })));
   const ana = await login('ana@example.com');
   const ben = await login('ben@example.com');
@@ -183,14 +183,16 @@ test('admins set the on-call days, counts and sign-in domains from Settings', as
     const page = await (await get('/settings', ana)).text();
     assert.match(page, /On-call coverage/);
     assert.match(page, /name="weekend_count"/);
-    assert.match(page, /name="domains"/);
+    assert.doesNotMatch(page, /name="domains"/, 'the domain is not editable in the app');
+    assert.match(page, /ALLOWED_EMAIL_DOMAINS/);
+    assert.match(page, /@example\.com/);
     const readOnly = await (await get('/settings', ben)).text();
     assert.doesNotMatch(readOnly, /name="weekend_count"/, 'engineers see the coverage but cannot edit it');
     assert.match(readOnly, /Ask an admin to change it/);
 
     const attempt = { start: '18:00', end: '09:00', weekend_count: '2', weekday_count: '3', day_1: '1', day_2: '1', day_3: '1' };
     assert.equal((await post('/settings/coverage', form(attempt), { cookie: ben })).status, 403);
-    assert.equal((await post('/settings/domains', form({ domains: '@example.com' }), { cookie: ben })).status, 403);
+    assert.equal((await post('/settings/domains', form({ domains: '@other.org' }), { cookie: ana })).status, 404, 'there is no route to change it');
 
     assert.equal((await post('/settings/coverage', form({ ...attempt, weekday_count: '0' }), { cookie: ana })).status, 303);
     assert.deepEqual(app.shifts.coverage().days, originalCoverage.days, 'invalid counts change nothing');
@@ -205,23 +207,13 @@ test('admins set the on-call days, counts and sign-in domains from Settings', as
     await post('/settings/coverage', form({ ...attempt, preset: 'all' }), { cookie: ana });
     assert.deepEqual(app.shifts.coverage().days, [0, 1, 2, 3, 4, 5, 6], 'a preset replaces the ticked days');
 
-    let res = await post('/settings/domains', form({ domains: '@other.org' }), { cookie: ana });
-    assert.equal(res.status, 303);
-    assert.deepEqual(config.allowedEmailDomains, originalDomains, 'an admin cannot lock themselves out');
-    await post('/settings/domains', form({ domains: 'not a domain' }), { cookie: ana });
-    assert.deepEqual(config.allowedEmailDomains, originalDomains);
-    await post('/settings/domains', form({ domains: '@Example.com, other.org' }), { cookie: ana });
-    assert.deepEqual(config.allowedEmailDomains, ['example.com', 'other.org']);
-
     app.shifts.setCoverage(originalCoverage);
-    config.allowedEmailDomains = originalDomains;
     await app.loadSettings();
     assert.deepEqual(app.shifts.coverage().days, [0, 1, 2, 3, 4, 5, 6], 'saved coverage is loaded at startup');
-    assert.deepEqual(config.allowedEmailDomains, ['example.com', 'other.org'], 'saved domains are loaded at startup');
+    assert.deepEqual(config.allowedEmailDomains, originalDomains, 'the domain still comes from the environment');
   } finally {
     app.shifts.setCoverage(originalCoverage);
-    config.allowedEmailDomains = originalDomains;
-    await app.db.run("DELETE FROM settings WHERE key IN ('coverage', 'allowed_domains')");
+    await app.db.run("DELETE FROM settings WHERE key = 'coverage'");
     await app.db.run("UPDATE users SET role = 'non_technical' WHERE id = ?", [benId]);
   }
 });

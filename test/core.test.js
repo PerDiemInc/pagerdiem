@@ -7,9 +7,10 @@ process.env.SHIFT_END = 'MON 09:00';
 process.env.ESCALATE_AFTER_MINUTES = '15';
 process.env.REPAGE_EVERY_MINUTES = '5';
 
-const { config } = await import('../src/config.js');
+const { config, slackTeamProblem } = await import('../src/config.js');
+const { feedToken } = await import('../src/calendar.js');
 const { makeShifts } = await import('../src/time.js');
-const { normalizeCoverage, normalizeDomains, describeDays, coverageFromEnv } = await import('../src/settings.js');
+const { normalizeCoverage, describeDays, coverageFromEnv } = await import('../src/settings.js');
 const { freshDb } = await import('./helpers.js');
 const { openDb } = await import('../src/db.js');
 const { DatabaseSync } = await import('node:sqlite');
@@ -642,9 +643,6 @@ test('coverage and domain settings are validated', () => {
   assert.match(normalizeCoverage({ ...ok, end: '9am' }).error, /End time/);
   assert.match(normalizeCoverage({ ...ok, weekendCount: 0 }).error, /1 to 10/);
   assert.match(normalizeCoverage({ ...ok, weekdayCount: 11 }).error, /1 to 10/);
-  assert.deepEqual(normalizeDomains('@Example.com, example.org  example.com').domains, ['example.com', 'example.org']);
-  assert.match(normalizeDomains('').error, /at least one/);
-  assert.match(normalizeDomains('not a domain!, x').error, /not a valid domain/);
   assert.equal(describeDays([5, 6, 0]), 'Fri–Sun');
   assert.equal(describeDays([1, 3, 6]), 'Mon, Wed, Sat');
   assert.equal(describeDays([1, 2, 3, 4, 5]), 'Mon–Fri');
@@ -669,4 +667,30 @@ test('coverage can be set from environment variables', () => {
   assert.deepEqual(coverageFromEnv({ ON_CALL_DAYS: 'FRI,SAT,SUN' }), { days: [0, 5, 6], start: '18:00', end: '09:00', weekendCount: 2, weekdayCount: 2 });
   assert.throws(() => coverageFromEnv({ ON_CALL_DAYS: 'FRI,FUNDAY' }), /FUNDAY/);
   assert.throws(() => coverageFromEnv({ ON_CALL_DAYS: 'FRI', ON_CALL_START: '6pm' }), /Start time/);
+});
+
+test('production requires SLACK_TEAM_ID when Slack is connected', () => {
+  const prod = { NODE_ENV: 'production' };
+  assert.equal(slackTeamProblem({ ...prod }), null, 'no Slack, nothing to pin');
+  assert.match(slackTeamProblem({ ...prod, SLACK_BOT_TOKEN: 'xoxb-1' }), /SLACK_TEAM_ID is required/);
+  assert.match(slackTeamProblem({ ...prod, SLACK_SIGNING_SECRET: 's' }), /SLACK_TEAM_ID is required/);
+  assert.equal(slackTeamProblem({ ...prod, SLACK_BOT_TOKEN: 'xoxb-1', SLACK_TEAM_ID: 'T0123456789' }), null);
+  assert.equal(slackTeamProblem({ ...prod, SLACK_BOT_TOKEN: 'xoxb-1', ALLOW_ANY_SLACK_WORKSPACE: 'true' }), null, 'explicit opt-out');
+  assert.equal(slackTeamProblem({ SLACK_BOT_TOKEN: 'xoxb-1' }), null, 'local development is not affected');
+});
+
+test('the calendar feed link can be revoked with CALENDAR_FEED_SECRET without touching sessions', () => {
+  const original = config.calendarFeedSecret;
+  try {
+    config.calendarFeedSecret = '';
+    const derived = feedToken();
+    assert.equal(feedToken(), derived, 'stable');
+    config.calendarFeedSecret = 'first-feed-secret';
+    const first = feedToken();
+    assert.notEqual(first, derived, 'a dedicated secret changes the link');
+    config.calendarFeedSecret = 'second-feed-secret';
+    assert.notEqual(feedToken(), first, 'rotating it revokes the old link');
+  } finally {
+    config.calendarFeedSecret = original;
+  }
 });

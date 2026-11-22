@@ -8,7 +8,7 @@ services:
     buildCommand: npm ci --omit=dev
     startCommand: node src/server.js
     healthCheckPath: /healthz
-    autoDeploy: true
+    autoDeployTrigger: checksPass
     envVars:
       - key: NODE_VERSION
         value: "24"
@@ -34,6 +34,8 @@ services:
         value: FRI 18:00
       - key: SHIFT_END
         value: MON 09:00
+      - key: CALENDAR_FEED_SECRET  # optional: change it to revoke every calendar feed link (openssl rand -hex 24)
+        sync: false
       - key: SLACK_BOT_TOKEN       # Slack app: OAuth & Permissions -> Bot User OAuth Token
         sync: false
       - key: SLACK_SIGNING_SECRET  # Slack app: Basic Information -> Signing Secret

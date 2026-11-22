@@ -22,6 +22,7 @@ test('init.sh --yes writes a working .env with generated secrets', () => {
   assert.equal(r.status, 0, r.stderr);
   assert.match(value(r.env, 'SESSION_SECRET'), /^[0-9a-f]{64}$/);
   assert.match(value(r.env, 'API_TOKEN'), /^[0-9a-f]{48}$/);
+  assert.match(value(r.env, 'CALENDAR_FEED_SECRET'), /^[0-9a-f]{48}$/);
   assert.equal(value(r.env, 'ON_CALL_DAYS'), 'FRI,SAT,SUN');
   assert.equal(value(r.env, 'ALLOWED_EMAIL_DOMAINS'), 'example.com');
   assert.equal(value(r.env, 'PUBLIC_URL'), 'http://localhost:3000');

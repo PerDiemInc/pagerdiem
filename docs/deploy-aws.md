@@ -34,9 +34,11 @@ aws rds create-db-instance \
   --db-instance-class db.t4g.micro --allocated-storage 20 \
   --master-username pagerdiem --manage-master-user-password \
   --no-publicly-accessible --backup-retention-period 7 \
+  --storage-encrypted --deletion-protection \
   --vpc-security-group-ids sg-DATABASE
 ```
 
+- `--storage-encrypted` encrypts the database, its backups and snapshots (it can't be turned on later without restoring from an encrypted copy), and `--deletion-protection` stops the instance being deleted by accident.
 - `sg-DATABASE` should allow inbound **5432 only from the ECS task's security group** (step 4).
 - `--manage-master-user-password` stores the password in Secrets Manager. Read it once to
   build the connection string:
@@ -54,10 +56,12 @@ aws ecr create-repository --repository-name pagerdiem
 
 # Amazon RDS CA bundle, copied into the image by the Dockerfile
 curl -o certs/rds-global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+shasum -a 256 certs/rds-global-bundle.pem   # compare with the checksum on AWS's RDS SSL page before building
 
 aws ecr get-login-password | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+TAG=$(git rev-parse --short HEAD)   # a version tag, never :latest
 docker buildx build --platform linux/arm64 \
-  -t $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/pagerdiem:latest --push .
+  -t $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/pagerdiem:$TAG --push .
 ```
 
 ## 3. Secrets: Secrets Manager
@@ -142,9 +146,13 @@ Follow [Render guide step 5](deploy-render-slack.md#5-slack-app), replacing the 
 ## 8. Deploy updates
 
 ```bash
+TAG=$(git rev-parse --short HEAD)   # a version tag, never :latest
 docker buildx build --platform linux/arm64 \
-  -t $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/pagerdiem:latest --push .
-aws ecs update-service --cluster pagerdiem --service pagerdiem --force-new-deployment
+  -t $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/pagerdiem:$TAG --push .
+Then put the new tag in the task definition's `image` and register it (`aws ecs register-task-definition`), and point the service at it:
+
+```bash
+aws ecs update-service --cluster pagerdiem --service pagerdiem --task-definition pagerdiem --force-new-deployment
 ```
 
 ECS reads secrets when a task starts, so a secret change also needs `--force-new-deployment`.

@@ -15,7 +15,6 @@ app.server.listen(config.port, () => {
   console.log(`  Shifts: ${JSON.stringify(config.shiftStart)} -> ${JSON.stringify(config.shiftEnd)} in ${config.timezone}`);
   console.log(`  Slack: ${slackEnabled() ? 'connected' : 'dry-run'}`);
   if (slackEnabled() && !config.slack.signingSecret) console.warn('  WARNING: SLACK_BOT_TOKEN is set but SLACK_SIGNING_SECRET is not, so every Slack command and button will be rejected.');
-  if (slackEnabled() && config.isProd && !config.slack.teamId) console.warn('  WARNING: SLACK_TEAM_ID is not set, so any Slack workspace with a valid signature is accepted.');
 });
 
 // Stay awake on free hosting: a request through the public URL counts as traffic.

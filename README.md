@@ -87,10 +87,11 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 
 | Variable | Required | Description |
 |---|---|---|
-| `ALLOWED_EMAIL_DOMAINS` | production | Your Google Workspace email domain(s), comma-separated, e.g. `example.com`. An admin can change them later in **Settings → Workspace**. |
+| `ALLOWED_EMAIL_DOMAINS` | production | Your Google Workspace email domain(s), comma-separated, e.g. `example.com`. Set only here: change it and restart to change who can sign in. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | production | Google OAuth client (Web application). Without them, production lets nobody in. |
 | `DATABASE_URL` | production | Postgres connection string. Without it, a local SQLite file is used. |
-| `SESSION_SECRET` | production | Long random string (signs sessions and the calendar feed link) |
+| `SESSION_SECRET` | production | Long random string (signs sessions; also derives the calendar feed link unless `CALENDAR_FEED_SECRET` is set) |
+| `CALENDAR_FEED_SECRET` | | Secret behind the calendar feed link. Change it to revoke every existing link without logging anyone out. |
 | `PUBLIC_URL` | | The app's public URL. Set automatically on Render. |
 | `TEAM_NAME`, `APP_NAME` | | Shown on the sign-in page and calendar feed |
 | `TEAM_TIMEZONE`, `SHIFT_START`, `SHIFT_END` | | Defaults: `America/New_York`, `FRI 18:00`, `MON 09:00`. These, and `PEOPLE_PER_WEEKEND`, are only the starting coverage: once an admin saves **Settings → On-call coverage**, the saved days, times and counts win. |
@@ -101,7 +102,7 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` | for Slack | From your Slack app |
 | `SLACK_ONCALL_CHANNEL` | for Slack | Channel ID for on-call posts (invite the bot) |
 | `SLACK_ONCALL_CHANNEL_NAME` | | The channel's name, shown in messages (default `on-call`) |
-| `SLACK_TEAM_ID` | recommended | Your Slack workspace ID. Requests from other workspaces are rejected. |
+| `SLACK_TEAM_ID` | production with Slack | Your Slack workspace ID. Requests from other workspaces are rejected. The app refuses to start in production with Slack connected and no workspace ID, unless `ALLOW_ANY_SLACK_WORKSPACE=true`. |
 | `SLACK_ENGINEERS_GROUP_ID` | | Slack user group (e.g. @engineers) tagged when an incident starts |
 | `API_TOKEN` | | Bearer token for the HTTP API |
 | `WHATSAPP_GROUP_URL` | | Optional team chat invite link, shown as a Join button |
@@ -150,7 +151,7 @@ Databases created before roles existed are migrated on first start: admins stay 
 
 - Production sign-in is Google only, restricted to `ALLOWED_EMAIL_DOMAINS` on a Workspace-managed account. Set the OAuth consent screen to **Internal** for a second lock at Google's end.
 - Slack requests are verified with the signing secret and, with `SLACK_TEAM_ID`, restricted to your workspace.
-- The API requires a bearer token. The calendar feed uses an unguessable link.
+- The API requires a bearer token. The calendar feed uses an unguessable link; set a new `CALENDAR_FEED_SECRET` to revoke it, for example after someone leaves.
 - See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## Development
