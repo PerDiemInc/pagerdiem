@@ -1,0 +1,52 @@
+# Render Blueprint: dashboard.render.com -> New -> Blueprint -> pick this repo.
+services:
+  - type: web
+    name: pagerdiem
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/server.js
+    healthCheckPath: /healthz
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: API_TOKEN
+        generateValue: true
+      - key: DATABASE_URL        # Neon Postgres connection string (asked for when you create the Blueprint)
+        sync: false
+      - key: GOOGLE_CLIENT_ID      # Google sign-in, limited to ALLOWED_EMAIL_DOMAINS
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: ALLOWED_EMAIL_DOMAINS   # your company's email domain, e.g. example.com
+        sync: false
+      - key: TEAM_NAME
+        sync: false
+      - key: TEAM_TIMEZONE
+        value: America/New_York
+      - key: SHIFT_START
+        value: FRI 18:00
+      - key: SHIFT_END
+        value: MON 09:00
+      - key: PING_ENABLED          # the /ping AI check is off unless this is true (see docs/ping.md)
+        value: "false"
+      - key: CALENDAR_FEED_SECRET  # optional: change it to revoke every calendar feed link (openssl rand -hex 24)
+        sync: false
+      - key: SLACK_BOT_TOKEN       # Slack app: OAuth & Permissions -> Bot User OAuth Token
+        sync: false
+      - key: SLACK_SIGNING_SECRET  # Slack app: Basic Information -> Signing Secret
+        sync: false
+      - key: SLACK_ONCALL_CHANNEL  # channel ID for on-call posts (invite the bot)
+        sync: false
+      - key: SLACK_ONCALL_CHANNEL_NAME
+        value: on-call
+      - key: SLACK_TEAM_ID         # your Slack workspace ID; other workspaces are rejected
+        sync: false
+      - key: SLACK_ENGINEERS_GROUP_ID  # optional user group tagged when an incident starts
+        sync: false

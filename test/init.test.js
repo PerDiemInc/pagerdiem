@@ -1,0 +1,126 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+const root = path.resolve(import.meta.dirname, '..');
+
+function runInit(args, input = '') {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-init-'));
+  const envFile = path.join(dir, 'env');
+  const result = spawnSync('bash', ['init.sh', '--no-install', '--env-file', envFile, ...args], { cwd: root, input, encoding: 'utf8' });
+  const env = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : null;
+  return { ...result, env, envFile, dir };
+}
+
+const value = (env, key) => new RegExp(`^${key}=(.*)$`, 'm').exec(env)?.[1];
+
+test('init.sh --yes writes a working .env with generated secrets', () => {
+  const r = runInit(['--yes']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(value(r.env, 'SESSION_SECRET'), /^[0-9a-f]{64}$/);
+  assert.match(value(r.env, 'API_TOKEN'), /^[0-9a-f]{48}$/);
+  assert.match(value(r.env, 'CALENDAR_FEED_SECRET'), /^[0-9a-f]{48}$/);
+  assert.equal(value(r.env, 'ON_CALL_DAYS'), 'FRI,SAT,SUN');
+  assert.equal(value(r.env, 'ALLOWED_EMAIL_DOMAINS'), 'example.com');
+  assert.equal(value(r.env, 'PUBLIC_URL'), 'http://localhost:3000');
+  assert.equal(value(r.env, 'DATABASE_URL'), 'postgres://pagerdiem:pagerdiem@localhost:5432/pagerdiem', 'PostgreSQL is the default');
+  assert.equal(value(r.env, 'DATABASE_PATH'), undefined, 'no SQLite unless chosen');
+  assert.equal((fs.statSync(r.envFile).mode & 0o777).toString(8), '600', 'only the owner can read it');
+  const loaded = spawnSync('node', ['--env-file', r.envFile, '-e',
+    "import('./src/config.js').then((m) => console.log(JSON.stringify(m.config.coverage)))"], { cwd: root, encoding: 'utf8' });
+  assert.equal(loaded.status, 0, loaded.stderr);
+  assert.deepEqual(JSON.parse(loaded.stdout).days, [0, 5, 6], 'the app reads the file');
+});
+
+test('init.sh uses the answers it is given, quotes values, and keeps secrets off the screen', () => {
+  const answers = ['Acme Tools', 'Acme Platform', 'Acme.com', 'Europe/London', '4000', 'mon, tue', '17:30', '08:00', '3',
+    'y', 'xoxb-abc-123', 'sekret-signing', 'C0123456789', 'incidents', 'T0123456789', ''];
+  const r = runInit([], answers.join('\n') + '\n');
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(value(r.env, 'APP_NAME'), '"Acme Tools"');
+  assert.equal(value(r.env, 'TEAM_NAME'), '"Acme Platform"');
+  assert.equal(value(r.env, 'ALLOWED_EMAIL_DOMAINS'), 'acme.com');
+  assert.equal(value(r.env, 'TEAM_TIMEZONE'), 'Europe/London');
+  assert.equal(value(r.env, 'PORT'), '4000');
+  assert.equal(value(r.env, 'PUBLIC_URL'), 'http://localhost:4000');
+  assert.equal(value(r.env, 'ON_CALL_DAYS'), 'MON,TUE');
+  assert.equal(value(r.env, 'ON_CALL_START'), '17:30');
+  assert.equal(value(r.env, 'ON_CALL_END'), '08:00');
+  assert.equal(value(r.env, 'PEOPLE_PER_WEEKEND'), '3');
+  assert.equal(value(r.env, 'SLACK_BOT_TOKEN'), 'xoxb-abc-123');
+  assert.equal(value(r.env, 'SLACK_SIGNING_SECRET'), 'sekret-signing');
+  assert.equal(value(r.env, 'SLACK_ONCALL_CHANNEL'), 'C0123456789');
+  assert.equal(value(r.env, 'SLACK_ONCALL_CHANNEL_NAME'), 'incidents');
+  assert.equal(value(r.env, 'SLACK_TEAM_ID'), 'T0123456789');
+  assert.ok(!r.stdout.includes('xoxb-abc-123') && !r.stdout.includes('sekret-signing'), 'secrets are not echoed');
+  assert.equal(value(r.env, 'SLACK_ENGINEERS_GROUP_ID'), '', 'a skipped answer stays empty');
+});
+
+test('init.sh asks again when an answer is not valid', () => {
+  const r = runInit([], 'PagerDiem\nTeam\nnot a domain\nexample.org\n');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Use a domain like example\.com/);
+  assert.equal(value(r.env, 'ALLOWED_EMAIL_DOMAINS'), 'example.org');
+});
+
+test('init.sh never replaces an existing .env without --force', () => {
+  const first = runInit(['--yes']);
+  fs.writeFileSync(first.envFile, 'KEEP=me\n');
+  const again = spawnSync('bash', ['init.sh', '--no-install', '--yes', '--env-file', first.envFile], { cwd: root, encoding: 'utf8' });
+  assert.notEqual(again.status, 0);
+  assert.match(again.stderr, /already exists/);
+  assert.equal(fs.readFileSync(first.envFile, 'utf8'), 'KEEP=me\n');
+  const forced = spawnSync('bash', ['init.sh', '--no-install', '--yes', '--force', '--env-file', first.envFile], { cwd: root, encoding: 'utf8' });
+  assert.equal(forced.status, 0, forced.stderr);
+  assert.match(fs.readFileSync(first.envFile, 'utf8'), /^SESSION_SECRET=[0-9a-f]{64}$/m);
+});
+
+test('init.sh leaves the /ping AI check off unless asked, and sets it up when asked', () => {
+  const off = runInit(['--yes']);
+  assert.equal(value(off.env, 'PING_ENABLED'), 'false');
+  assert.equal(value(off.env, 'ANTHROPIC_API_KEY'), '');
+
+  const answers = ['', '', '', '', '', '', '', '', '', 'n', 'y', 'sk-ant-test-key-123', '', 'https://api.example.com/health, https://web.example.com/up'];
+  const on = runInit([], answers.join('\n') + '\n');
+  assert.equal(on.status, 0, on.stderr);
+  assert.equal(value(on.env, 'PING_ENABLED'), 'true');
+  assert.equal(value(on.env, 'ANTHROPIC_API_KEY'), 'sk-ant-test-key-123');
+  assert.equal(value(on.env, 'PING_SKILL_FILE'), 'skills/ping.md');
+  assert.equal(value(on.env, 'PING_CHECK_URLS'), 'https://api.example.com/health,https://web.example.com/up');
+  assert.ok(!on.stdout.includes('sk-ant-test-key-123'), 'the key is not echoed');
+
+  const noKey = runInit([], ['', '', '', '', '', '', '', '', '', 'n', 'y', ''].join('\n') + '\n');
+  assert.equal(value(noKey.env, 'PING_ENABLED'), 'false', 'no key means it stays off');
+});
+
+test('init.sh never asks about the database: PostgreSQL unless you pass a flag', () => {
+  const r = runInit([], '');
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /Choose|1\)/, 'no database menu');
+  assert.match(r.stdout, /PostgreSQL in Docker/);
+  assert.equal(value(r.env, 'DATABASE_URL'), 'postgres://pagerdiem:pagerdiem@localhost:5432/pagerdiem');
+});
+
+test('init.sh uses your own PostgreSQL with --database-url, and SQLite only with --sqlite', () => {
+  const own = runInit(['--yes', '--database-url', 'postgres://me:secret@db.example.com:5432/pd']);
+  assert.equal(own.status, 0, own.stderr);
+  assert.equal(value(own.env, 'DATABASE_URL'), 'postgres://me:secret@db.example.com:5432/pd');
+  assert.ok(!own.stdout.includes('secret'), 'the password is not printed');
+
+  const bad = runInit(['--yes', '--database-url', 'mysql://nope']);
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stdout + bad.stderr, /not a PostgreSQL URL/);
+
+  const sqlite = runInit(['--yes', '--sqlite']);
+  assert.equal(sqlite.status, 0, sqlite.stderr);
+  assert.match(sqlite.stdout, /SQLite file, as you asked/);
+  assert.equal(value(sqlite.env, 'DATABASE_URL'), '');
+  assert.equal(value(sqlite.env, 'DATABASE_PATH'), 'data/pagerdiem.db');
+
+  const both = runInit(['--sqlite', '--database-url', 'postgres://a@b/c']);
+  assert.notEqual(both.status, 0);
+  assert.match(both.stderr, /either --sqlite or --database-url/);
+});

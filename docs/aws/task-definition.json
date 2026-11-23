@@ -1,0 +1,51 @@
+{
+  "family": "pagerdiem",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "256",
+  "memory": "512",
+  "runtimePlatform": { "cpuArchitecture": "ARM64", "operatingSystemFamily": "LINUX" },
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/pagerdiem-execution",
+  "containerDefinitions": [
+    {
+      "name": "pagerdiem",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/pagerdiem:GIT_SHA",
+      "essential": true,
+      "portMappings": [{ "containerPort": 3000, "protocol": "tcp" }],
+      "environment": [
+        { "name": "NODE_ENV", "value": "production" },
+        { "name": "PORT", "value": "3000" },
+        { "name": "PUBLIC_URL", "value": "https://oncall.example.com" },
+        { "name": "ALLOWED_EMAIL_DOMAINS", "value": "example.com" },
+        { "name": "TEAM_NAME", "value": "Example Engineering" },
+        { "name": "TEAM_TIMEZONE", "value": "America/New_York" },
+        { "name": "KEEP_AWAKE", "value": "false" },
+        { "name": "NODE_EXTRA_CA_CERTS", "value": "/app/certs/rds-global-bundle.pem" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:pagerdiem/app-XXXXXX:DATABASE_URL::" },
+        { "name": "SESSION_SECRET", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:pagerdiem/app-XXXXXX:SESSION_SECRET::" },
+        { "name": "API_TOKEN", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:pagerdiem/app-XXXXXX:API_TOKEN::" },
+        { "name": "GOOGLE_CLIENT_ID", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:pagerdiem/app-XXXXXX:GOOGLE_CLIENT_ID::" },
+        { "name": "GOOGLE_CLIENT_SECRET", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:pagerdiem/app-XXXXXX:GOOGLE_CLIENT_SECRET::" },
+        { "name": "SLACK_BOT_TOKEN", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:pagerdiem/app-XXXXXX:SLACK_BOT_TOKEN::" },
+        { "name": "SLACK_SIGNING_SECRET", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:pagerdiem/app-XXXXXX:SLACK_SIGNING_SECRET::" },
+        { "name": "SLACK_ONCALL_CHANNEL", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:pagerdiem/app-XXXXXX:SLACK_ONCALL_CHANNEL::" },
+        { "name": "SLACK_TEAM_ID", "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:pagerdiem/app-XXXXXX:SLACK_TEAM_ID::" }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "wget -qO- http://localhost:3000/healthz || exit 1"],
+        "interval": 30, "timeout": 5, "retries": 3, "startPeriod": 20
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/pagerdiem",
+          "awslogs-region": "REGION",
+          "awslogs-stream-prefix": "app",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}

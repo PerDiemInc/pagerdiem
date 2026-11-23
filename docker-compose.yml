@@ -1,0 +1,41 @@
+# PostgreSQL for local development, and optionally the whole app.
+#   docker compose up -d --wait db      just the database (npm run db)
+#   docker compose --profile app up     the database and the app, built from this folder
+# The database listens on 127.0.0.1 only. Change PAGERDIEM_DB_PORT if 5432 is taken.
+services:
+  db:
+    image: postgres:16-alpine@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d
+    environment:
+      POSTGRES_USER: pagerdiem
+      POSTGRES_PASSWORD: pagerdiem
+      POSTGRES_DB: pagerdiem
+    ports:
+      - "127.0.0.1:${PAGERDIEM_DB_PORT:-5432}:5432"
+    volumes:
+      - pagerdiem-data:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pagerdiem -d pagerdiem"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  app:
+    profiles: ["app"]
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://pagerdiem:pagerdiem@db:5432/pagerdiem
+      NODE_ENV: development
+      PUBLIC_URL: http://localhost:3000
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  pagerdiem-data:

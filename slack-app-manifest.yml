@@ -1,0 +1,44 @@
+# Create the Slack app: https://api.slack.com/apps -> Create New App -> From a manifest.
+# Replace https://YOUR-APP.example.com with your PUBLIC_URL first.
+display_information:
+  name: PagerDiem
+  description: Weekend on-call rotation and paging
+  background_color: "#e8492b"
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true          # required for the bot to DM people
+    messages_tab_read_only_enabled: true
+  bot_user:
+    display_name: PagerDiem
+    always_online: true
+  slash_commands:
+    - command: /oncall
+      url: https://YOUR-APP.example.com/slack/commands
+      description: Who's on call now and the next weekends
+      should_escape: false
+    - command: /ping
+      url: https://YOUR-APP.example.com/slack/commands
+      description: Ask the AI check to look into a problem (off unless enabled)
+      usage_hint: "[what looks wrong]"
+      should_escape: false
+    - command: /page
+      url: https://YOUR-APP.example.com/slack/commands
+      description: Page whoever is on call
+      usage_hint: "[what is broken]"
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - commands
+      - im:write
+      - users:read
+      - users:read.email
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://YOUR-APP.example.com/slack/interactions
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
