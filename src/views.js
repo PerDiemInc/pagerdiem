@@ -21,6 +21,10 @@ function ago(iso, now = new Date()) {
 
 // Colour tokens are HeroUI V3's (light, then dark). Coloured text on tinted fills uses the
 // *-soft-fg tokens, which pass 4.5:1 in both themes; the fill colours themselves are for fills only.
+const DARK = `color-scheme:dark;--bg:#060607;--surface:#18181b;--surface-2:#232325;--text:#fcfcfc;--muted:#a1a1aa;
+--border:#28282c;--sep:#2a2a2e;--default:#27272a;--default-hover:#2e2e31;--accent-soft:rgba(4,133,247,.12);--accent-soft-fg:#61a8fc;
+--danger-soft:rgba(219,59,62,.15);--danger-soft-fg:#eb7872;--success-soft:rgba(23,201,100,.12);--success-soft-fg:#74d88f;
+--warning-soft:rgba(247,183,80,.12);--warning-soft-fg:#f9cb87;--field:#1f1f23;--field-shadow:inset 0 0 0 1px #3f3f46;--oc-l:24%;--oc-text-l:86%`;
 const CSS = `
 :root{color-scheme:light;--bg:#f5f5f5;--surface:#fff;--surface-2:#efeff0;--text:#18181b;--muted:#61616a;--border:#dedee0;--sep:#e4e4e7;
 --default:#ebebec;--default-hover:#e1e1e2;--accent:#006fee;--accent-hover:#005bc4;--accent-soft:rgba(4,133,247,.15);--accent-soft-fg:#1a5799;
@@ -28,10 +32,8 @@ const CSS = `
 --success-soft:rgba(23,201,100,.15);--success-soft-fg:#246b3c;--warning-soft:rgba(245,165,36,.15);--warning-soft-fg:#77552a;
 --field:#fff;--field-shadow:inset 0 0 0 1px var(--border),0 2px 4px rgba(0,0,0,.04),0 1px 2px rgba(0,0,0,.06);
 --ring:0 0 0 2px var(--bg),0 0 0 4px var(--accent);--oc-l:91%;--oc-text-l:25%}
-@media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#060607;--surface:#18181b;--surface-2:#232325;--text:#fcfcfc;--muted:#a1a1aa;
---border:#28282c;--sep:#2a2a2e;--default:#27272a;--default-hover:#2e2e31;--accent-soft:rgba(4,133,247,.12);--accent-soft-fg:#61a8fc;
---danger-soft:rgba(219,59,62,.15);--danger-soft-fg:#eb7872;--success-soft:rgba(23,201,100,.12);--success-soft-fg:#74d88f;
---warning-soft:rgba(247,183,80,.12);--warning-soft-fg:#f9cb87;--field:#1f1f23;--field-shadow:inset 0 0 0 1px #3f3f46;--oc-l:24%;--oc-text-l:86%}}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){${DARK}}}
+:root[data-theme=dark]{${DARK}}
 *{box-sizing:border-box}
 body{margin:0;font:400 14px/20px Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;letter-spacing:-.005em;
 background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
@@ -53,14 +55,20 @@ p{margin:0 0 12px}.muted{color:var(--muted)}.small{font-size:12px;line-height:16
 .nav a[aria-current=page]{background:var(--surface)}.nav a[aria-current=page] .ic{color:var(--accent)}
 .nav .label{flex:1}
 .badge{min-width:20px;height:20px;padding:0 6px;border-radius:99px;display:inline-grid;place-items:center;font-size:12px;font-weight:600;background:var(--danger-soft);color:var(--danger-soft-fg)}
-.me{margin-top:auto;background:var(--surface);border-radius:20px;padding:12px;display:flex;align-items:center;gap:10px}
+.side-foot{margin-top:auto;display:flex;flex-direction:column;gap:8px}
+.theme{display:flex;gap:2px;padding:3px;border-radius:99px;background:var(--default)}
+.theme button{flex:1;height:28px;padding:0 8px;gap:6px;font-size:12px;background:none;color:var(--muted)}
+.theme button:hover{background:none;color:var(--text)}.theme button[aria-pressed=true]{background:var(--surface);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.theme .ic{width:14px;height:14px}
+.me{background:var(--surface);border-radius:20px;padding:12px;display:flex;align-items:center;gap:10px}
 .me .who{flex:1;min-width:0;display:flex;flex-direction:column}.me .who span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 main{padding:28px 32px 64px;max-width:1200px;width:100%;min-width:0}
 @media (max-width:900px){
   .shell{display:block}
   .side{position:static;height:auto;padding:12px 16px;gap:12px;flex-direction:row;flex-wrap:wrap;align-items:center;box-shadow:inset 0 -1px 0 var(--sep)}
   .brand{padding:4px 0}.nav{order:3;flex-direction:row;width:100%;overflow-x:auto;gap:4px;scrollbar-width:none}.nav a{flex:none;height:32px;padding:0 12px}
-  .me{margin:0 0 0 auto;padding:4px 4px 4px 8px;background:none}.me .who{display:none}
+  .side-foot{margin:0 0 0 auto;flex-direction:row;align-items:center}.theme button{flex:none;width:28px;padding:0}.theme .label{display:none}
+  .me{padding:4px 4px 4px 8px;background:none}.me .who{display:none}
   main{padding:20px 16px 48px}
 }
 
@@ -193,6 +201,9 @@ const I = {
   users: icon('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>'),
   list: icon('<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>'),
   sliders: icon('<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>'),
+  sun: icon('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>'),
+  moon: icon('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9"/>'),
+  monitor: icon('<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>'),
   logout: icon('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/>'),
   check: icon('<circle cx="12" cy="12" r="10"/><path d="m8 12 3 3 5-6"/>'),
   info: icon('<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>'),
@@ -203,10 +214,13 @@ const I = {
   next: icon('<path d="m9 18 6-6-6-6"/>'),
 };
 
+export const THEMES = ['system', 'light', 'dark'];
+
 const initials = (name) => esc(String(name || '?').split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase());
 
 export function layout({ title, user, body, flash, active }) {
-  const head = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+  const theme = THEMES.includes(user?.theme) ? user.theme : 'system';
+  const head = `<!doctype html><html lang="en"${theme === 'system' ? '' : ` data-theme="${theme}"`}><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} · ${esc(config.appName)}</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📟</text></svg>">
@@ -233,9 +247,13 @@ export function layout({ title, user, body, flash, active }) {
   return `${head}<div class="shell">
 <aside class="side">${brand}
   <nav class="nav" aria-label="Main">${links}</nav>
+  <div class="side-foot">
+  <form method="post" action="/theme" class="theme" aria-label="Theme"><input type="hidden" name="back" value="${esc(user.path || '/')}">
+    ${[['system', 'System', I.monitor], ['light', 'Light', I.sun], ['dark', 'Dark', I.moon]].map(([value, label, ic]) =>
+      `<button name="theme" value="${value}" aria-pressed="${theme === value}" title="${label} theme">${ic}<span class="label">${label}</span></button>`).join('')}</form>
   <div class="me"><span class="avatar">${initials(user.name)}</span>
     <div class="who"><span>${esc(user.name)}</span><span class="small muted">${esc(ROLE_LABELS[user.role] || '')}</span></div>
-    <form method="post" action="/logout" class="inline"><button class="ghost icon" aria-label="Log out" title="Log out">${I.logout}</button></form></div>
+    <form method="post" action="/logout" class="inline"><button class="ghost icon" aria-label="Log out" title="Log out">${I.logout}</button></form></div></div>
 </aside>
 <main>${flash ? flashBox(flash) : ''}${body}</main></div>${foot}`;
 }
