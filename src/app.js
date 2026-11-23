@@ -262,6 +262,14 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
 
   router.post('/logout', async (ctx) => { ctx.r.cookie(clearSessionCookie()); ctx.r.redirect('/login'); });
 
+  // The theme is a per-browser choice, so it lives in a cookie rather than on the user.
+  router.post('/theme', async (ctx) => {
+    const theme = views.THEMES.includes(ctx.body.theme) ? ctx.body.theme : 'system';
+    ctx.r.cookie(theme === 'system' ? 'pd_theme=; Path=/; Max-Age=0'
+      : `pd_theme=${theme}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${config.publicUrl.startsWith('https://') ? '; Secure' : ''}`);
+    ctx.r.redirect(safeBack(ctx.body.back, '/'));
+  });
+
   // ---------- dashboard & schedule ----------
   router.get('/', async (ctx) => {
     if (!requireUser(ctx)) return;
@@ -719,8 +727,10 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   // signature or token instead, so they are exempt.
   function isSameOrigin(req, pathname) {
     if (pathname.startsWith('/slack/') || pathname.startsWith('/api/')) return true;
+    // Sec-Fetch-Site is the reliable signal: with Referrer-Policy no-referrer, Chrome sends Origin: null
+    // on the app's own form posts. Origin is only the fallback for browsers that don't send it.
     const site = req.headers['sec-fetch-site'];
-    if (site && !['same-origin', 'none'].includes(site)) return false;
+    if (site) return ['same-origin', 'none'].includes(site);
     const origin = req.headers.origin;
     if (origin && origin !== 'null') {
       try { return new URL(origin).host === new URL(config.publicUrl).host || new URL(origin).host === req.headers.host; } catch { return false; }
@@ -752,7 +762,8 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
       // Sessions are stateless cookies, so a removed teammate is shut out by checking on every request.
       const sessionUser = uid ? await rotation.userById(uid) : null;
       ctx.user = sessionUser?.active
-        ? { ...sessionUser, openIncidents: Number((await db.get("SELECT COUNT(*) AS n FROM incidents WHERE status = 'open'")).n) }
+        ? { ...sessionUser, openIncidents: Number((await db.get("SELECT COUNT(*) AS n FROM incidents WHERE status = 'open'")).n),
+          theme: parseCookies(req.headers.cookie).pd_theme, path: url.pathname + url.search }
         : null;
       await found.handler(ctx);
     } catch (err) {

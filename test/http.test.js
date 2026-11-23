@@ -148,6 +148,9 @@ test('hardening: bad URLs and cookies, redirects, cross-site posts, Slack guests
   const foreignOrigin = await post('/incidents', form({ title: 'csrf' }), { cookie: ana, origin: 'https://evil.example' });
   assert.equal(foreignOrigin.status, 403);
   assert.equal((await post('/incidents', form({ title: 'same site' }), { cookie: ana, 'sec-fetch-site': 'same-origin', origin: base })).status, 303);
+  // The app sends Referrer-Policy: no-referrer, so Chrome posts its own forms with Origin: null.
+  assert.equal((await post('/incidents', form({ title: 'chrome form' }), { cookie: ana, 'sec-fetch-site': 'same-origin', origin: 'null' })).status, 303);
+  assert.equal((await post('/incidents', form({ title: 'csrf' }), { cookie: ana, origin: 'null' })).status, 403, 'a null origin alone is not trusted');
 
   const incidentId = (await app.db.get("SELECT id FROM incidents WHERE title = 'same site'")).id;
   const signed = (body) => {
@@ -363,4 +366,25 @@ test('the incidents page has status tabs with counts, and the nav shows how many
   assert.match(await page('/incidents?status=bogus'), /Tabs acknowledged/, 'an unknown status shows everything');
 
   assert.match(await page('/calendar'), new RegExp(`aria-label="${open} open incidents?">${open}</span>`));
+});
+
+test('the theme switch saves light or dark for this browser and goes back to the page', async () => {
+  const ana = cookieOf(await post('/login', form({ email: 'ana@example.com', password: 'longenough123' })));
+  const page = async (cookie) => (await fetch(base + '/incidents', { headers: { cookie } })).text();
+  assert.match(await page(ana), /<html lang="en">/, 'follows the system until someone picks');
+  assert.match(await page(ana), /name="theme" value="system" aria-pressed="true"/);
+
+  let res = await post('/theme', form({ theme: 'dark', back: '/incidents?status=open' }), { cookie: ana });
+  assert.equal(res.status, 303);
+  assert.equal(res.headers.get('location'), '/incidents?status=open');
+  const theme = res.headers.getSetCookie().find((c) => c.startsWith('pd_theme='));
+  assert.match(theme, /^pd_theme=dark;.*Max-Age=31536000/);
+  const html = await page(`${ana}; ${theme.split(';')[0]}`);
+  assert.match(html, /<html lang="en" data-theme="dark">/);
+  assert.match(html, /name="theme" value="dark" aria-pressed="true"/);
+
+  res = await post('/theme', form({ theme: 'system', back: '//evil.example' }), { cookie: ana });
+  assert.equal(res.headers.get('location'), '/');
+  assert.match(res.headers.getSetCookie().find((c) => c.startsWith('pd_theme=')), /Max-Age=0/);
+  assert.match(await page(`${ana}; pd_theme=bogus`), /<html lang="en">/, 'an unknown value is ignored');
 });
