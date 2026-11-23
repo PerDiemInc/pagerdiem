@@ -719,8 +719,10 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   // signature or token instead, so they are exempt.
   function isSameOrigin(req, pathname) {
     if (pathname.startsWith('/slack/') || pathname.startsWith('/api/')) return true;
+    // Sec-Fetch-Site is the reliable signal: with Referrer-Policy no-referrer, Chrome sends Origin: null
+    // on the app's own form posts. Origin is only the fallback for browsers that don't send it.
     const site = req.headers['sec-fetch-site'];
-    if (site && !['same-origin', 'none'].includes(site)) return false;
+    if (site) return ['same-origin', 'none'].includes(site);
     const origin = req.headers.origin;
     if (origin && origin !== 'null') {
       try { return new URL(origin).host === new URL(config.publicUrl).host || new URL(origin).host === req.headers.host; } catch { return false; }

@@ -148,6 +148,9 @@ test('hardening: bad URLs and cookies, redirects, cross-site posts, Slack guests
   const foreignOrigin = await post('/incidents', form({ title: 'csrf' }), { cookie: ana, origin: 'https://evil.example' });
   assert.equal(foreignOrigin.status, 403);
   assert.equal((await post('/incidents', form({ title: 'same site' }), { cookie: ana, 'sec-fetch-site': 'same-origin', origin: base })).status, 303);
+  // The app sends Referrer-Policy: no-referrer, so Chrome posts its own forms with Origin: null.
+  assert.equal((await post('/incidents', form({ title: 'chrome form' }), { cookie: ana, 'sec-fetch-site': 'same-origin', origin: 'null' })).status, 303);
+  assert.equal((await post('/incidents', form({ title: 'csrf' }), { cookie: ana, origin: 'null' })).status, 403, 'a null origin alone is not trusted');
 
   const incidentId = (await app.db.get("SELECT id FROM incidents WHERE title = 'same site'")).id;
   const signed = (body) => {
