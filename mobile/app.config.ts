@@ -15,7 +15,9 @@ const config: ExpoConfig = {
   ios: {
     bundleIdentifier: bundleId,
     appleTeamId: process.env.APPLE_TEAM_ID ?? 'NDXNQ5M4K4', // Per Diem Subscriptions, Inc.
-    icon: './assets/expo.icon',
+    icon: './assets/images/icon.png',
+    // Each TestFlight or App Store upload needs a higher build number than the last.
+    buildNumber: process.env.BUILD_NUMBER ?? '1',
     supportsTablet: false,
     config: { usesNonExemptEncryption: false },
     infoPlist: {
