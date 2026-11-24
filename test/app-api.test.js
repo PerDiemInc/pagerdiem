@@ -7,7 +7,7 @@ process.env.ALLOWED_EMAIL_DOMAINS = 'example.com';
 const { freshDb } = await import('./helpers.js');
 const { createApp } = await import('../src/app.js');
 const { pairingCode, challengeFor } = await import('../src/devices.js');
-const { signPayload } = await import('../src/auth.js');
+const { signPayload, sessionCookie } = await import('../src/auth.js');
 const { config } = await import('../src/config.js');
 
 let app, base, db;
@@ -95,6 +95,22 @@ test('POST /api/app/device stores the push token and checks', async () => {
   const again = await signIn(people.cal, 'android');
   await postJson('/api/app/device', { pushToken: 'fcm-token-1' }, again);
   assert.equal((await db.all("SELECT id FROM devices WHERE push_token = 'fcm-token-1'")).length, 1);
+});
+
+test('a web login cookie cannot use the phone API', async () => {
+  // A signed-in browser session, as the web app sets it after login (Iris is an admin).
+  const cookie = sessionCookie(people.iris.id).split(';')[0];
+  const asBrowser = (method, path, body) => fetch(base + path, {
+    method, redirect: 'manual', headers: { cookie, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  assert.equal((await asBrowser('GET', '/', undefined)).status, 200, 'the cookie is a real web session');
+  for (const path of ['/api/app/me', '/api/app/home', '/api/app/team', '/api/app/incidents']) {
+    assert.equal((await asBrowser('GET', path)).status, 401, path);
+  }
+  const before = await db.get('SELECT COUNT(*) AS n FROM incidents');
+  assert.equal((await asBrowser('POST', '/api/app/incidents', { title: 'From a browser' })).status, 401);
+  assert.equal((await asBrowser('POST', '/api/app/team/1/role', { role: 'engineer' })).status, 401);
+  assert.equal((await db.get('SELECT COUNT(*) AS n FROM incidents')).n, before.n, 'nothing was created');
 });
 
 test('requests without a bearer token get 401 JSON, not a redirect', async () => {
