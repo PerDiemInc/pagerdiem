@@ -1017,6 +1017,7 @@ test('phone home screen: who is on call on a Saturday, and what is next on a Thu
   const sat = await buildHome({ db, shifts, rotation, incidents, user: ana, now: at('2026-11-21T15:00:00Z') });
   assert.deepEqual(sat.onCall.people.map((p) => p.name), ['Ana', 'Ben']);
   assert.equal(sat.onCall.backup.name, 'Cal');
+  assert.equal(sat.onCall.start, '2026-11-20T23:00:00.000Z', 'the shift start, for the time-left ring');
   assert.equal(sat.onCall.until, '2026-11-23T14:00:00.000Z');
   assert.equal(sat.comingUp[0].key, '2026-11-27', 'coming up starts after the running weekend');
   const thu = await buildHome({ db, shifts, rotation, incidents, user: ana, now: at('2026-11-19T15:00:00Z') });
