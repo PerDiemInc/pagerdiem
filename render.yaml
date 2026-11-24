@@ -9,6 +9,10 @@ services:
     startCommand: node src/server.js
     healthCheckPath: /healthz
     autoDeployTrigger: checksPass
+    buildFilter:
+      ignoredPaths:          # phone app and docs changes don't redeploy the server
+        - mobile/**
+        - docs/**
     envVars:
       - key: NODE_VERSION
         value: "24"
@@ -49,4 +53,14 @@ services:
       - key: SLACK_TEAM_ID         # your Slack workspace ID; other workspaces are rejected
         sync: false
       - key: SLACK_ENGINEERS_GROUP_ID  # optional user group tagged when an incident starts
+        sync: false
+      - key: APNS_KEY_ID           # optional: phone app calls on iPhone (see docs/deploy-render-slack.md)
+        sync: false
+      - key: APNS_TEAM_ID
+        sync: false
+      - key: APNS_PRIVATE_KEY      # contents of the .p8 key
+        sync: false
+      - key: APNS_ENV              # production for TestFlight/App Store builds
+        value: production
+      - key: FCM_SERVICE_ACCOUNT   # optional: phone app calls on Android (Firebase service account JSON)
         sync: false

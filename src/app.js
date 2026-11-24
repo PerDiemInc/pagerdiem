@@ -3,7 +3,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { config, slackEnabled, googleEnabled } from './config.js';
 import * as google from './google.js';
-import { makeShifts, formatLocal, formatRange, parseKey, tzParts } from './time.js';
+import { makeShifts, formatLocal, formatRange, tzParts } from './time.js';
 import * as calendar from './calendar.js';
 import { makeRotation } from './rotation.js';
 import { makeNotifier } from './notify/index.js';
@@ -11,20 +11,21 @@ import { makeIncidents } from './incidents.js';
 import { makeScheduler } from './scheduler.js';
 import { makePing } from './ping.js';
 import { lookupUserIdByEmail, verifySlackSignature, mention, slackText, postMessage as slackPost } from './notify/slack.js';
-import { normalizePhone } from './phone.js';
 import {
   hashPassword, verifyPassword, sessionCookie, clearSessionCookie, sessionUserId, parseCookies, safeEqual,
   signPayload, readPayload,
 } from './auth.js';
 import { HttpError, readBody, parseBody, makeResponder, makeRouter } from './http.js';
 import * as views from './views.js';
-import { PRESETS, normalizeCoverage, readSetting, writeSetting, describeDays } from './settings.js';
-import { DEFAULT_ROLE, isRole, isAdmin, isResponder } from './roles.js';
+import { normalizeCoverage, readSetting } from './settings.js';
+import { isRole, isAdmin, isResponder } from './roles.js';
+import { makeMembers, EMAIL, REMOVED } from './members.js';
+import { makeActions } from './actions.js';
+import { makeDevices } from './devices.js';
+import { registerAppApi, appSignInRedirect } from './app-api.js';
+import { qrSvg } from './qr.js';
 
-const cleanName = (value) => String(value || '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
 const safeBack = (value, fallback) => (/^\/(?![/\\])[^\r\n\\]*$/.test(String(value || '')) ? value : fallback);
-const SLACK_ID = /^[UW][A-Z0-9]{6,}$/;
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   const shifts = makeShifts(config);
@@ -33,22 +34,12 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   const incidents = makeIncidents({ db, rotation, notify });
   const scheduler = makeScheduler({ db, shifts, rotation, notify, incidents });
   const ping = makePing({ db, rotation, post: pingPost ?? slackPost, fetchImpl: pingFetch });
+  const members = makeMembers({ db, rotation, notify });
+  const actions = makeActions({ db, shifts, rotation, notify, scheduler });
+  const devices = makeDevices(db);
+  const { userCount, userByEmail, userBySlack, createMember } = members;
   const router = makeRouter();
   const fmt = (d) => formatLocal(d, config.timezone);
-
-  // ---------- helpers ----------
-  const userCount = async () => (await db.get('SELECT COUNT(*) AS n FROM users')).n;
-  const userByEmail = async (email) => (await db.get('SELECT * FROM users WHERE email = ?', [email]));
-  const userBySlack = async (id) => (id ? (await db.get('SELECT * FROM users WHERE slack_user_id = ?', [id])) : null);
-  const userByPhone = async (phone) => (phone ? (await db.get('SELECT * FROM users WHERE whatsapp = ?', [phone])) : null);
-
-  /** Turn "U0123ABCD" or an email into a Slack member ID (when Slack is connected). */
-  async function resolveSlack(value, fallbackEmail) {
-    const v = String(value || '').trim() || fallbackEmail;
-    if (SLACK_ID.test(v.toUpperCase())) return v.toUpperCase();
-    if (!slackEnabled()) return v || null; // dry-run: keep what they typed, relinked once Slack is connected
-    return EMAIL.test(v) ? lookupUserIdByEmail(v) : null;
-  }
 
   /** On startup with Slack connected, turn any stored Slack emails into member IDs. */
   async function relinkSlackUsers() {
@@ -63,14 +54,21 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   function setFlash(r, type, message, extra = {}) {
     r.cookie(`pd_flash=${encodeURIComponent(JSON.stringify({ type, message, ...extra }))}; Path=/; HttpOnly; SameSite=Lax; Max-Age=60`);
   }
+  /** Run an action and flash its message; a rule broken with `status` flashes as an error instead. */
+  async function flashAction(ctx, status, fn) {
+    try {
+      setFlash(ctx.r, 'ok', (await fn()).message);
+    } catch (err) {
+      if (err.status !== status) throw err;
+      setFlash(ctx.r, 'error', err.message);
+    }
+  }
   function takeFlash(ctx) {
     const raw = parseCookies(ctx.req.headers.cookie).pd_flash;
     if (!raw) return null;
     ctx.r.cookie('pd_flash=; Path=/; Max-Age=0');
     try { return JSON.parse(raw); } catch { return null; }
   }
-
-  const REMOVED = "You've been removed from the on-call rotation, so you can't sign in. Ask an admin to add you back.";
 
   function requireUser(ctx) {
     if (!ctx.user) {
@@ -103,40 +101,6 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   // ---------- auth ----------
   // Production: "Sign in with Google", limited to your Google Workspace domain (ALLOWED_EMAIL_DOMAINS).
   // Local dev (no GOOGLE_CLIENT_ID): email + password, limited to the same email domains.
-
-  /**
-   * Validate and add a team member. Each person must have their own Slack account and
-   * phone number. Returns { user } or { error }.
-   */
-  async function createMember({ name, email, slack, whatsapp: rawPhone, passwordHash }) {
-    name = cleanName(name);
-    const whatsapp = normalizePhone(rawPhone);
-    if (!name) return { error: { field: 'name', message: 'Please enter your name.' } };
-    if (!whatsapp) return { error: { field: 'whatsapp', message: 'Please enter your phone number with country code, e.g. +1 415 555 0123.' } };
-    if (await userByEmail(email)) return { error: { field: 'email', message: 'That email is already signed up — log in instead.' } };
-    const slackId = await resolveSlack(slack, email);
-    if (!slackId) return { error: { field: 'slack', message: "We couldn't find you on Slack. Enter your Slack member ID (Slack profile → ⋮ → Copy member ID)." } };
-    const clash = await contactClash({ slackId, whatsapp });
-    if (clash) return { error: clash };
-
-    const isFirst = (await userCount()) === 0;
-    const role = isFirst ? 'admin' : DEFAULT_ROLE;
-    const { id } = await db.get(`INSERT INTO users (name, email, password_hash, slack_user_id, whatsapp, is_admin, role, rotation_order)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-    [name, email, passwordHash, slackId, whatsapp, isFirst ? 1 : 0, role, await rotation.nextRotationOrder()]);
-    const user = await rotation.userById(Number(id));
-    if (isResponder(user)) await notify.channel({ text: `:wave: ${mention(user)} joined the weekend on-call rotation.` });
-    return { user, isFirst };
-  }
-
-  /** Someone else already uses this Slack account or phone number? Returns { field, message } or null. */
-  async function contactClash({ slackId, whatsapp, exceptId = null }) {
-    const bySlack = await userBySlack(slackId);
-    if (bySlack && bySlack.id !== exceptId) return { field: 'slack', message: `That Slack account already belongs to ${bySlack.name}. Use your own Slack account.` };
-    const byPhone = await userByPhone(whatsapp);
-    if (byPhone && byPhone.id !== exceptId) return { field: 'whatsapp', message: `That phone number already belongs to ${byPhone.name}. Use your own number.` };
-    return null;
-  }
 
   function welcomeFlash(r, user, isFirst) {
     setFlash(r, 'ok', isFirst
@@ -208,7 +172,9 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   router.get('/auth/google', async (ctx) => {
     if (!googleEnabled()) throw new HttpError(404, 'Not found');
     const state = crypto.randomBytes(16).toString('hex');
-    ctx.r.cookie(tempCookie(OAUTH_COOKIE, signPayload({ state }, 600), 600));
+    // ?app=1: the phone app opened this sign-in and gets the result back as a pagerdiem:// link.
+    const app = ctx.query.get('app') === '1';
+    ctx.r.cookie(tempCookie(OAUTH_COOKIE, signPayload({ state, ...(app ? { app: true } : {}) }, 600), 600));
     ctx.r.redirect(google.authorizeUrl(state), 302);
   });
 
@@ -223,11 +189,18 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     try {
       identity = await google.exchangeCode(ctx.query.get('code'));
     } catch (err) {
+      if (err.status !== 403) console.error(err.message);
+      if (saved.app) return ctx.r.redirect(appSignInRedirect({ error: err.status === 403 ? err.message : 'Sign-in failed. Please try again.' }), 302);
       if (err.status === 403) throw new HttpError(403, err.message);
-      console.error(err.message);
       return ctx.r.redirect('/login?error=1');
     }
     const existing = await userByEmail(identity.email);
+    if (saved.app) {
+      // The phone gets a pairing code (or, for someone new, a signed sign-up to finish in the app).
+      return ctx.r.redirect(existing && !existing.active
+        ? appSignInRedirect({ error: REMOVED })
+        : appSignInRedirect({ publicUrl: config.publicUrl, user: existing, identity }), 302);
+    }
     if (existing) {
       if (!existing.active) throw new HttpError(403, REMOVED);
       ctx.r.cookie(sessionCookie(existing.id));
@@ -294,52 +267,21 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   async function rosterChange(ctx, action) {
     if (!requireUser(ctx)) return;
     requireResponder(ctx);
-    parseKey(ctx.params.key);
-    const shift = shifts.forKey(ctx.params.key);
-    const fn = action === 'join' ? rotation.join : rotation.leave;
-    let result;
-    try {
-      result = await fn(shift, ctx.user);
-    } catch (err) {
-      throw new HttpError(err.status || 500, err.message);
-    }
-    const range = formatRange(shift, config.timezone);
-    if (result.changed) {
-      const { entry } = result;
-      const short = entry.needsCover ? ` :warning: Now ${entry.people.length}/${entry.shift.count} — needs cover.` : '';
-      await notify.channel({
-        text: action === 'join'
-          ? `:raised_hand: ${mention(ctx.user)} added themselves to the weekend of ${range}. On call: ${entry.people.map(mention).join(', ')}.`
-          : `:wave: ${mention(ctx.user)} removed themselves from the weekend of ${range}. On call: ${entry.people.map(mention).join(', ') || 'nobody'}.${short}`,
-      });
-      setFlash(ctx.r, 'ok', action === 'join' ? `You're on call for ${range}.` : `You're off ${range}.${entry.needsCover ? ' That weekend now needs cover.' : ''}`);
-    }
+    const fn = action === 'join' ? actions.joinWeekend : actions.leaveWeekend;
+    const result = await fn(ctx.user, ctx.params.key, 'web');
+    if (result.changed) setFlash(ctx.r, 'ok', result.message);
     ctx.r.redirect(ctx.body.back === 'calendar' ? `/calendar?month=${ctx.params.key.slice(0, 7)}` : '/');
   }
   router.post('/weekends/:key/join', (ctx) => rosterChange(ctx, 'join'));
   router.post('/weekends/:key/leave', (ctx) => rosterChange(ctx, 'leave'));
-
-  let checkSwapsUntil = null; // see announceMissedSwaps
 
   // "Take their spot": you're in, they're out. Undoable by you for 10 seconds; Slack and the
   // replaced person hear about it only after that window passes (see announceSwaps).
   router.post('/weekends/:key/swap', async (ctx) => {
     if (!requireUser(ctx)) return;
     requireResponder(ctx);
-    parseKey(ctx.params.key);
-    const shift = shifts.forKey(ctx.params.key);
-    const replaced = await rotation.userById(Number(ctx.body.user_id));
-    if (!replaced) throw new HttpError(400, 'Pick someone on that weekend.');
-    let row;
-    try {
-      row = await rotation.swap(shift, ctx.user, replaced.id);
-    } catch (err) {
-      throw new HttpError(err.status || 500, err.message);
-    }
-    setTimeout(() => announceSwaps().catch((err) => console.error('announce swaps failed:', err)), rotation.UNDO_MS + 2_500).unref?.();
-    checkSwapsUntil = Date.now() + 2 * 60_000; // and the scheduler double-checks for a couple of minutes
-    setFlash(ctx.r, 'ok', `You took ${replaced.name}'s spot for ${formatRange(shift, config.timezone)}.`,
-      { undo: { id: row.id, until: new Date(row.at).getTime() + rotation.UNDO_MS } });
+    const r = await actions.swapWeekend(ctx.user, ctx.params.key, ctx.body.user_id, 'web');
+    setFlash(ctx.r, 'ok', r.message, { undo: { id: r.undo.ids[0], until: new Date(r.undo.until).getTime() } });
     ctx.r.redirect(`/calendar?month=${ctx.params.key.slice(0, 7)}`);
   });
 
@@ -347,26 +289,14 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     if (!requireUser(ctx)) return;
     let undone;
     try {
-      undone = await rotation.undoSwap(Number(ctx.params.id), ctx.user);
+      undone = await actions.undoSwap(ctx.user, [ctx.params.id], 'web');
     } catch (err) {
       setFlash(ctx.r, 'error', err.message);
       return ctx.r.redirect(safeBack(ctx.body.back, '/calendar'));
     }
-    setFlash(ctx.r, 'ok', undone ? 'Swap undone. Nothing changed and nobody was notified.' : 'Already undone.');
+    setFlash(ctx.r, 'ok', undone.message);
     ctx.r.redirect(safeBack(ctx.body.back, '/calendar'));
   });
-
-  /** Tell Slack and the replaced person about swaps whose undo window has passed. */
-  async function announceSwaps(now = new Date()) {
-    for (const s of await rotation.claimSwapsToAnnounce(now)) {
-      const shift = shifts.forKey(s.weekend_key);
-      const by = await rotation.userById(s.by_user_id);
-      const replaced = await rotation.userById(s.replaced_user_id);
-      const range = formatRange(shift, config.timezone);
-      await notify.user(replaced, { text: `:repeat: ${by.name} took your on-call spot for the weekend of ${range}. You're off that weekend.` });
-      await notify.channel({ text: `:repeat: ${mention(by)} took ${mention(replaced)}'s spot for the weekend of ${range}.` });
-    }
-  }
 
   // Public (to everyone signed in) history of who added or removed themselves.
   router.get('/log', async (ctx) => {
@@ -422,7 +352,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     const inc = (await incidents.get(Number(ctx.params.id)));
     if (!inc) throw new HttpError(404, 'Incident not found');
     ctx.r.html(views.incidentPage({
-      user: ctx.user, inc, events: (await incidents.events(inc.id)),
+      user: ctx.user, inc, events: (await incidents.events(inc.id)), notes: await incidents.notes(inc.id),
       people: { assigned: (await rotation.userById(inc.assigned_user_id)), backup: (await rotation.userById(inc.backup_user_id)) },
       notifications: (await db.all('SELECT * FROM notifications WHERE incident_id = ? ORDER BY id DESC', [inc.id])),
       names: Object.fromEntries((await db.all('SELECT slack_user_id, name FROM users WHERE slack_user_id IS NOT NULL')).map((u) => [u.slack_user_id, u.name])),
@@ -451,8 +381,10 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     if (!requireUser(ctx)) return;
     requireResponder(ctx);
     const role = isRole(ctx.query.get('role')) ? ctx.query.get('role') : '';
+    const link = appSignInRedirect({ publicUrl: config.publicUrl, user: ctx.user });
     ctx.r.html(views.teamPage({
       user: ctx.user, role, members: (await rotation.activeMembers()),
+      phoneApp: { qr: qrSvg(link), phones: await devices.listForUser(ctx.user.id) },
       inactive: (await db.all('SELECT * FROM users WHERE active = 0 ORDER BY name')),
       flash: takeFlash(ctx),
     }));
@@ -461,68 +393,39 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   router.post('/team/:id/move', async (ctx) => {
     if (!requireUser(ctx)) return;
     requireAdmin(ctx);
-    (await rotation.move(Number(ctx.params.id), Number(ctx.body.dir) < 0 ? -1 : 1));
+    await actions.moveMember(ctx.user, ctx.params.id, ctx.body.dir, 'web');
     ctx.r.redirect('/team');
   });
 
   router.post('/team/:id/active', async (ctx) => {
     if (!requireUser(ctx)) return;
     requireAdmin(ctx);
-    const active = ctx.body.active === '1' ? 1 : 0;
-    const id = Number(ctx.params.id);
-    if (!active) {
-      const target = await rotation.userById(id);
-      const admins = await db.get("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1");
-      if (target?.role === 'admin' && target.active && admins.n <= 1) {
-        setFlash(ctx.r, 'error', 'There must be at least one admin. Make someone else an admin first.');
-        return ctx.r.redirect('/team');
-      }
-    }
-    if (active) await db.run('UPDATE users SET active = 1, rotation_order = ? WHERE id = ?', [await rotation.nextRotationOrder(), id]);
-    else await db.run('UPDATE users SET active = 0 WHERE id = ?', [id]);
-    setFlash(ctx.r, 'ok', active ? 'Added back to the end of the rotation.' : 'Removed from the rotation.');
+    await flashAction(ctx, 409, () => actions.setActive(ctx.user, ctx.params.id, ctx.body.active === '1', 'web'));
     ctx.r.redirect('/team');
   });
 
   router.post('/team/:id/role', async (ctx) => {
     if (!requireUser(ctx)) return;
     requireAdmin(ctx);
-    const role = String(ctx.body.role || '');
-    if (!isRole(role)) throw new HttpError(400, 'Pick a role.');
-    const target = await rotation.userById(Number(ctx.params.id));
-    if (!target) throw new HttpError(404, 'Person not found');
-    if (target.role === 'admin' && role !== 'admin') {
-      const admins = await db.get("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1");
-      if (admins.n <= 1) {
-        setFlash(ctx.r, 'error', 'There must be at least one admin.');
-        return ctx.r.redirect('/team');
-      }
-    }
-    await db.run('UPDATE users SET role = ?, is_admin = ? WHERE id = ?', [role, role === 'admin' ? 1 : 0, target.id]);
-    setFlash(ctx.r, 'ok', `${target.name} is now ${role.replace('_', '-')}.`);
+    await flashAction(ctx, 409, () => actions.setRole(ctx.user, ctx.params.id, ctx.body.role, 'web'));
+    ctx.r.redirect('/team');
+  });
+
+  // Sign one of your own phones out of the app.
+  router.post('/devices/:id/revoke', async (ctx) => {
+    if (!requireUser(ctx)) return;
+    const id = Number(ctx.params.id);
+    const device = Number.isSafeInteger(id) ? await devices.get(id) : null;
+    if (!device || device.user_id !== ctx.user.id || device.revoked_at) throw new HttpError(404, 'Phone not found');
+    await devices.revoke(device.id);
+    setFlash(ctx.r, 'ok', `Signed out of ${device.name}. It won't ring for pages any more.`);
     ctx.r.redirect('/team');
   });
 
   router.post('/profile', async (ctx) => {
     if (!requireUser(ctx)) return;
-    const name = cleanName(ctx.body.name);
-    const whatsapp = normalizePhone(ctx.body.whatsapp);
-    if (!name || !whatsapp) {
-      setFlash(ctx.r, 'error', 'Name and a phone number with country code are required.');
-      return ctx.r.redirect('/team');
-    }
-    const slackId = await resolveSlack(ctx.body.slack, ctx.user.email);
-    if (!slackId) {
-      setFlash(ctx.r, 'error', "Couldn't find that Slack account. Paste your Slack member ID instead.");
-      return ctx.r.redirect('/team');
-    }
-    const clash = await contactClash({ slackId, whatsapp, exceptId: ctx.user.id });
-    if (clash) {
-      setFlash(ctx.r, 'error', clash.message);
-      return ctx.r.redirect('/team');
-    }
-    (await db.run('UPDATE users SET name = ?, whatsapp = ?, slack_user_id = ? WHERE id = ?', [name, whatsapp, slackId, ctx.user.id]));
-    setFlash(ctx.r, 'ok', 'Saved.');
+    const { error } = await members.updateProfile(ctx.user, { name: ctx.body.name, slack: ctx.body.slack, phone: ctx.body.whatsapp });
+    setFlash(ctx.r, error ? 'error' : 'ok', error ? error.message : 'Saved.');
     ctx.r.redirect('/team');
   });
 
@@ -543,10 +446,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   router.post('/admin/resend-weekend-start', async (ctx) => {
     if (!requireUser(ctx)) return;
     requireAdmin(ctx);
-    const people = await scheduler.resendWeekendStart();
-    setFlash(ctx.r, people ? 'ok' : 'error', people
-      ? `Re-sent "you're on call now" to ${people.map((p) => p.name).join(', ') || 'nobody (no one is on call)'}.`
-      : 'No weekend is in progress, so there is nothing to re-send.');
+    await flashAction(ctx, 409, () => actions.resendWeekendStart(ctx.user, 'web'));
     ctx.r.redirect('/settings');
   });
 
@@ -567,22 +467,10 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     if (!requireUser(ctx)) return;
     requireAdmin(ctx);
     const b = ctx.body;
-    const preset = PRESETS[b.preset];
-    const { coverage, error } = normalizeCoverage({
-      days: preset ? preset.days : [0, 1, 2, 3, 4, 5, 6].filter((d) => b[`day_${d}`] === '1'),
+    await flashAction(ctx, 400, () => actions.saveCoverage(ctx.user, {
+      preset: b.preset, days: [0, 1, 2, 3, 4, 5, 6].filter((d) => b[`day_${d}`] === '1'),
       start: b.start, end: b.end, weekendCount: b.weekend_count, weekdayCount: b.weekday_count,
-    });
-    if (error) {
-      setFlash(ctx.r, 'error', error);
-      return ctx.r.redirect('/settings');
-    }
-    await writeSetting(db, 'coverage', JSON.stringify(coverage));
-    shifts.setCoverage(coverage);
-    await notify.channel({
-      text: `:gear: ${mention(ctx.user)} changed on-call coverage: ${describeDays(coverage.days)}, ${coverage.start} → ${coverage.end}, ` +
-        `${coverage.weekendCount} on weekend days and ${coverage.weekdayCount} on weekdays.`,
-    });
-    setFlash(ctx.r, 'ok', 'On-call coverage saved. The calendar and rotation now follow it.');
+    }, 'web'));
     ctx.r.redirect('/settings');
   });
 
@@ -722,6 +610,8 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
 
   router.get('/healthz', async (ctx) => ctx.r.json({ ok: true }));
 
+  registerAppApi({ router, db, shifts, rotation, incidents, notify, actions, members, devices, scheduler });
+
   // ---------- server ----------
   // Browsers send Sec-Fetch-Site / Origin on form posts. Slack and the API authenticate with a
   // signature or token instead, so they are exempt.
@@ -741,7 +631,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   async function handle(req, res) {
     const r = makeResponder(res);
     let url = new URL('http://localhost/');
-    const ctx = { req, r, query: url.searchParams, params: {}, body: {}, raw: '', user: null,
+    const ctx = { req, r, query: url.searchParams, params: {}, body: {}, raw: '', user: null, device: null,
       ip: req.socket.remoteAddress };
     try {
       try {
@@ -758,30 +648,33 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
         ctx.raw = await readBody(req);
         ctx.body = parseBody(ctx.raw, req.headers['content-type']);
       }
-      const uid = sessionUserId(req.headers.cookie);
-      // Sessions are stateless cookies, so a removed teammate is shut out by checking on every request.
-      const sessionUser = uid ? await rotation.userById(uid) : null;
-      ctx.user = sessionUser?.active
-        ? { ...sessionUser, openIncidents: Number((await db.get("SELECT COUNT(*) AS n FROM incidents WHERE status = 'open'")).n),
-          theme: parseCookies(req.headers.cookie).pd_theme, path: url.pathname + url.search }
-        : null;
+      // The phone app signs every request with its own bearer token instead of a cookie.
+      const bearer = url.pathname.startsWith('/api/app/') && /^Bearer (.+)$/.exec(String(req.headers.authorization || ''))?.[1];
+      if (bearer) {
+        const auth = await devices.authenticate(bearer);
+        ctx.user = auth?.user ?? null;
+        ctx.device = auth?.device ?? null;
+      } else {
+        const uid = sessionUserId(req.headers.cookie);
+        // Sessions are stateless cookies, so a removed teammate is shut out by checking on every request.
+        const sessionUser = uid ? await rotation.userById(uid) : null;
+        ctx.user = sessionUser?.active
+          ? { ...sessionUser, openIncidents: Number((await db.get("SELECT COUNT(*) AS n FROM incidents WHERE status = 'open'")).n),
+            theme: parseCookies(req.headers.cookie).pd_theme, path: url.pathname + url.search }
+          : null;
+      }
       await found.handler(ctx);
     } catch (err) {
       const status = err.status || 500;
       if (status === 500) console.error(err);
       const message = status === 500 ? 'Something went wrong.' : err.message;
-      if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/slack/')) r.json({ error: message }, status);
+      if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/slack/')) r.json({ error: message, ...(err.field ? { field: err.field } : {}) }, status);
       else r.html(views.messagePage({ user: ctx.user, title: status === 404 ? 'Not found' : 'Oops', message, link: { href: '/', label: 'Back' } }), status);
     }
   }
 
   const server = http.createServer(handle);
-  // Each swap announces itself after its undo window (see the swap route). The scheduler only
-  // catches what a restart or a missed timer left behind: once at startup and for a couple of
-  // minutes after each swap, and otherwise it leaves the database alone.
-  scheduler.addStep?.(async function announceMissedSwaps(now) {
-    checkSwapsUntil ??= now.getTime();
-    if (now.getTime() <= checkSwapsUntil) await announceSwaps(now);
-  });
-  return { server, scheduler, rotation, ping, loadSettings, announceSwaps, incidents, shifts, relinkSlackUsers, db };
+  // Swaps announce themselves after their undo window; this catches any a restart left behind.
+  scheduler.addStep?.(actions.announceMissedSwaps);
+  return { server, scheduler, rotation, ping, loadSettings, announceSwaps: actions.announceSwaps, incidents, shifts, relinkSlackUsers, db, devices };
 }

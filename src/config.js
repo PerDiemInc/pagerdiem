@@ -58,6 +58,44 @@ export function slackTeamProblem(source) {
   }
   return null;
 }
+/** Push keys for the phone app. All optional: without them calls are logged as dry-run. */
+export function readPushConfig(source) {
+  const privateKey = (source.APNS_PRIVATE_KEY || '').replace(/\\n/g, '\n'); // a key pasted with \n instead of line breaks
+  let validKey = false;
+  try {
+    validKey = Boolean(privateKey) && crypto.createPrivateKey(privateKey).asymmetricKeyType === 'ec';
+  } catch { /* reported by pushWarnings */ }
+  let serviceAccount = null;
+  try {
+    const parsed = JSON.parse(source.FCM_SERVICE_ACCOUNT || 'null');
+    if (parsed?.project_id && parsed.client_email && parsed.private_key) serviceAccount = parsed;
+  } catch { /* reported by pushWarnings */ }
+  return {
+    apns: {
+      keyId: source.APNS_KEY_ID || '',
+      teamId: source.APNS_TEAM_ID || '',
+      privateKey,
+      enabled: Boolean(source.APNS_KEY_ID && source.APNS_TEAM_ID && validKey),
+      bundleId: source.APNS_BUNDLE_ID || 'com.tryperdiem.pagerdiem',
+      // TestFlight and App Store builds use production; only Xcode debug builds use the sandbox.
+      host: source.APNS_ENV === 'development' ? 'https://api.sandbox.push.apple.com' : 'https://api.push.apple.com',
+    },
+    fcm: { serviceAccount },
+  };
+}
+
+/** Half-configured push keys turn that platform's calls off. Shown at startup; never fatal. */
+export function pushWarnings(source) {
+  const warnings = [];
+  const apns = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_PRIVATE_KEY'].filter((k) => source[k]);
+  if (apns.length && apns.length < 3) warnings.push('Phone calls on iPhone are off: set APNS_KEY_ID, APNS_TEAM_ID and APNS_PRIVATE_KEY.');
+  else if (apns.length === 3 && !readPushConfig(source).apns.enabled) warnings.push('Phone calls on iPhone are off: APNS_PRIVATE_KEY is not a valid .p8 key.');
+  if (source.FCM_SERVICE_ACCOUNT && !readPushConfig(source).fcm.serviceAccount) {
+    warnings.push('Phone calls on Android are off: FCM_SERVICE_ACCOUNT must be the service account JSON from Firebase.');
+  }
+  return warnings;
+}
+
 {
   const problem = databaseProblem(env) || slackTeamProblem(env) || pingProblem(env);
   if (problem) throw new Error(problem);
@@ -108,6 +146,9 @@ export const config = {
   // Escalation: page the on-call, then the backup, then the whole channel.
   escalateAfterMinutes: int('ESCALATE_AFTER_MINUTES', 15),
   repageEveryMinutes: int('REPAGE_EVERY_MINUTES', 5),
+  // Phone app: call again this soon after the first page, so a repeated call gets through Do Not Disturb.
+  secondCallAfterMinutes: int('SECOND_CALL_AFTER_MINUTES', 2),
+  push: readPushConfig(env),
 
   apiToken: env.API_TOKEN || '',
 
@@ -150,4 +191,8 @@ export const config = {
 
 export const googleEnabled = () => Boolean(config.google.clientId && config.google.clientSecret);
 export const slackEnabled = () => Boolean(config.slack.botToken);
+export const pushEnabled = () => ({
+  ios: config.push.apns.enabled,
+  android: Boolean(config.push.fcm.serviceAccount),
+});
 

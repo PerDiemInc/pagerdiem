@@ -135,6 +135,11 @@ Everything company-specific is an environment variable. See [.env.example](.env.
   ```
 
   Point Sentry, Datadog, Grafana or CI alerts at `POST /api/incidents`.
+- **Phone app:** pages ring your phone like a call, next to the Slack DM. Sign in by scanning the
+  **Phone app** code on the Team page, or with Google from the app. Answering the call acknowledges
+  the page. Calls need push keys for the app's publisher: `APNS_KEY_ID`, `APNS_TEAM_ID` and
+  `APNS_PRIVATE_KEY` for iPhone, and `FCM_SERVICE_ACCOUNT` for Android (see `.env.example`). Without
+  them, calls are only logged as `dry-run` under Settings → Recent messages.
 
 ## How the rotation works
 

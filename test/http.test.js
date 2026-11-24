@@ -388,3 +388,37 @@ test('the theme switch saves light or dark for this browser and goes back to the
   assert.match(res.headers.getSetCookie().find((c) => c.startsWith('pd_theme=')), /Max-Age=0/);
   assert.match(await page(`${ana}; pd_theme=bogus`), /<html lang="en">/, 'an unknown value is ignored');
 });
+
+test('the Team page shows a one-time Phone app code and your signed-in phones', async () => {
+  const cookie = cookieOf(await post('/login', form({ email: 'ana@example.com', password: 'longenough123' })));
+  assert.ok(cookie);
+  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@example.com'");
+  const { device } = await app.devices.create(ana.id, { platform: 'ios', name: 'Ana’s iPhone' });
+  const page = await (await fetch(base + '/team', { headers: { cookie } })).text();
+  assert.match(page, /<h2>Phone app<\/h2>/);
+  assert.match(page, /<details>\s*<summary[^>]*>Show sign-in code<\/summary>[\s\S]*?<svg[^>]+aria-label="Phone app sign-in code"[\s\S]*?<\/details>/,
+    'the code only shows when asked, so a screen share of the Team page does not leak it');
+  assert.match(page, /Ana’s iPhone/);
+  assert.match(page, /Not tested yet/);
+  assert.match(page, new RegExp(`action="/devices/${device.id}/revoke"`));
+
+  let res = await post(`/devices/${device.id}/revoke`, '', { cookie });
+  assert.equal(res.status, 303);
+  assert.ok((await app.devices.get(device.id)).revoked_at);
+
+  const other = await app.db.get('SELECT * FROM users WHERE id != ? LIMIT 1', [ana.id]);
+  const { device: theirs } = await app.devices.create(other.id, { platform: 'android', name: 'Theirs' });
+  res = await post(`/devices/${theirs.id}/revoke`, '', { cookie });
+  assert.equal(res.status, 404, "you can only sign out your own phones");
+  assert.equal((await app.devices.get(theirs.id)).revoked_at, null);
+});
+
+test('notes from the phone app show in the incident timeline on the web', async () => {
+  const cookie = cookieOf(await post('/login', form({ email: 'ana@example.com', password: 'longenough123' })));
+  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@example.com'");
+  const inc = await app.incidents.create({ title: 'Noted incident', quiet: true, createdBy: ana.id });
+  await app.incidents.addNote(inc.id, ana, 'Square <status> page shows an outage.', 'app');
+  const page = await (await fetch(`${base}/incidents/${inc.id}`, { headers: { cookie } })).text();
+  assert.match(page, /Note from Ana Admin/);
+  assert.match(page, /Square &lt;status&gt; page shows an outage\./, 'escaped');
+});

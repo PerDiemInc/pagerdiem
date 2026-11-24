@@ -544,7 +544,7 @@ export function incidentsPage({ user, incidents, status, stats, now, flash }) {
   return layout({ title: 'Incidents', user, body, flash, active: 'incidents' });
 }
 
-export function incidentPage({ user, inc, events, people, notifications, names = {}, flash }) {
+export function incidentPage({ user, inc, events, notes = [], people, notifications, names = {}, flash }) {
   const body = `<p style="margin:0 0 12px"><a class="btn ghost sm" href="/incidents" style="margin-left:-12px">${I.back} All incidents</a></p>
   <div class="card">
     <div class="row" style="justify-content:space-between;align-items:flex-start;gap:16px">
@@ -559,8 +559,11 @@ export function incidentPage({ user, inc, events, people, notifications, names =
       <div><dt>Backup</dt><dd>${esc(people.backup?.name || '—')}</dd></div>
     </dl></div>
   <div class="grid">
-    <div class="card"><h2>Timeline</h2><ul class="timeline">${events.map((e) =>
-      `<li><div>${esc(e.message)}</div><div class="t-meta">${esc(fmt(e.at))}</div></li>`).join('')}</ul></div>
+    <div class="card"><h2>Timeline</h2><ul class="timeline">${[
+      ...events.map((e) => ({ at: e.at, html: esc(e.message) })),
+      ...notes.map((n) => ({ at: n.at, html: `<strong>Note from ${esc(n.user_name)}:</strong> ${esc(n.text)}` })),
+    ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)).map((item) =>
+      `<li><div>${item.html}</div><div class="t-meta">${esc(fmt(item.at))}</div></li>`).join('')}</ul></div>
     <div class="card"><h2>Messages sent</h2>${notificationTable(notifications, names)}</div>
   </div>`;
   return layout({ title: `Incident #${inc.id}`, user, body, flash, active: 'incidents' });
@@ -595,7 +598,7 @@ function notificationTable(rows, names = {}) {
     <td class="actions"><span class="pill ${esc(n.status)}">${esc(n.status)}</span><div class="t-meta">${esc(fmt(n.at))}</div></td></tr>`).join('')}</table></div>`;
 }
 
-export function teamPage({ user, members, inactive, role = '', flash }) {
+export function teamPage({ user, members, inactive, role = '', phoneApp, flash }) {
   const admin = isAdmin(user);
   const counts = Object.fromEntries(ROLES.map((r) => [r, members.filter((m) => m.role === r).length]));
   const chip = (value, label, count) =>
@@ -625,6 +628,7 @@ export function teamPage({ user, members, inactive, role = '', flash }) {
   <div class="card flush scroll"><div style="padding:24px 24px 4px"><h2>Rotation order</h2></div>
     <table><thead><tr><th>#</th><th>Name</th><th class="hide-sm">Slack</th><th class="hide-sm">Phone</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty">Nobody has this role.</td></tr>'}</tbody></table></div>
   ${removed}
+  ${phoneApp ? phoneAppCard(phoneApp) : ''}
   <div class="card" style="max-width:560px"><h2>Your contact details</h2>
     <form method="post" action="/profile">
       ${field({ id: 'name', label: 'Name', value: user.name, attrs: 'required' })}
@@ -634,6 +638,22 @@ export function teamPage({ user, members, inactive, role = '', flash }) {
       <button formaction="/profile/test">Send me a test message</button></div>
     </form></div>`;
   return layout({ title: 'Team', user, body, flash, active: 'team' });
+}
+
+/** The QR code that signs the PagerDiem app in as you, and the phones already signed in. */
+function phoneAppCard({ qr, phones }) {
+  const rows = phones.map((d) => `<tr>
+    <td>${esc(d.name)} <span class="t-meta">${d.platform === 'ios' ? 'iPhone' : 'Android'}</span></td>
+    <td class="t-meta">${d.tested_at ? `Tested ${esc(fmt(d.tested_at))}` : 'Not tested yet'}</td>
+    <td class="actions"><form method="post" action="/devices/${Number(d.id)}/revoke" class="inline"><button class="sm">Sign out</button></form></td>
+  </tr>`).join('');
+  return `<div class="card" style="max-width:560px"><h2>Phone app</h2>
+    <p class="muted">Pages ring your phone like a call. Scan this with the PagerDiem app to sign in. The code works once, for 10 minutes.</p>
+    <details>
+      <summary class="btn sm">Show sign-in code</summary>
+      <div style="width:200px;max-width:100%;margin:12px 0">${qr}</div>
+    </details>
+    ${rows ? `<table>${rows}</table>` : '<p class="t-meta">No phones signed in yet.</p>'}</div>`;
 }
 
 export function settingsPage({ user, coverage, domains, ping, status, notifications, flash }) {
