@@ -259,3 +259,12 @@ test('FCM: sends at the same moment share one sign-in', async () => {
   await Promise.all([fcm.send('a', {}), fcm.send('b', {}), fcm.send('c', {})]);
   assert.equal(google.calls.filter((c) => c.url === 'https://oauth2.googleapis.com/token').length, 1);
 });
+
+test('push senders fail cleanly when the network is down', async () => {
+  const apns = makeApns({ keyId: 'K1', teamId: 'T1', privateKey: pem(), bundleId: 'b', host: 'https://apns.invalid',
+    connect: () => { throw new Error('getaddrinfo ENOTFOUND'); } });
+  assert.deepEqual(await apns.sendVoip('a', {}), { ok: false, gone: false, reason: 'getaddrinfo ENOTFOUND' });
+  const { account } = rsaServiceAccount();
+  const fcm = makeFcm({ serviceAccount: account, fetchImpl: async () => { throw new Error('fetch failed'); } });
+  assert.deepEqual(await fcm.send('a', {}), { ok: false, gone: false, reason: 'fetch failed' });
+});

@@ -8,6 +8,7 @@ process.env.ALLOWED_EMAIL_DOMAINS = 'example.com';
 
 const { freshDb } = await import('./helpers.js');
 const { createApp } = await import('../src/app.js');
+const { readPayload } = await import('../src/auth.js');
 const { config } = await import('../src/config.js');
 
 let app, base;
@@ -421,4 +422,32 @@ test('notes from the phone app show in the incident timeline on the web', async 
   const page = await (await fetch(`${base}/incidents/${inc.id}`, { headers: { cookie } })).text();
   assert.match(page, /Note from Ana Admin/);
   assert.match(page, /Square &lt;status&gt; page shows an outage\./, 'escaped');
+});
+
+test('Google sign-in for the phone app must carry a challenge; the web flow is unchanged', async () => {
+  const saved = { ...config.google };
+  config.google.clientId = 'client';
+  config.google.clientSecret = 'secret';
+  try {
+    let res = await fetch(base + '/auth/google?app=1', { redirect: 'manual' });
+    assert.equal(res.status, 400);
+    const challenge = 'A'.repeat(43);
+    res = await fetch(`${base}/auth/google?app=1&challenge=${challenge}`, { redirect: 'manual' });
+    assert.equal(res.status, 302);
+    const cookie = res.headers.getSetCookie().find((c) => c.startsWith('pd_oauth=')).split(';')[0].slice('pd_oauth='.length);
+    assert.deepEqual([readPayload(cookie).app, readPayload(cookie).ch], [true, challenge]);
+    assert.equal((await fetch(base + '/auth/google', { redirect: 'manual' })).status, 302);
+  } finally {
+    Object.assign(config.google, saved);
+  }
+});
+
+test('admins move people in the rotation from the Team page', async () => {
+  const cookie = cookieOf(await post('/login', form({ email: 'ana@example.com', password: 'longenough123' })));
+  const order = async () => (await app.db.all('SELECT id FROM users WHERE active = 1 ORDER BY rotation_order, id')).map((u) => u.id);
+  const before = await order();
+  const res = await post(`/team/${before[0]}/move`, form({ dir: '1' }), { cookie });
+  assert.equal(res.status, 303);
+  assert.deepEqual((await order()).slice(0, 2), [before[1], before[0]]);
+  assert.equal((await post('/team/abc/move', form({ dir: '1' }), { cookie })).status, 404);
 });

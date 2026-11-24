@@ -4,41 +4,68 @@ import crypto from 'node:crypto';
 import { config } from './config.js';
 import { HttpError } from './http.js';
 import * as calendar from './calendar.js';
-import { PLATFORMS, pairingCode, redeemPairingCode } from './devices.js';
+import { PLATFORMS, pairingCode, redeemPairingCode, verifierMatches } from './devices.js';
 import { signPayload, readPayload } from './auth.js';
-import { REMOVED } from './members.js';
+import { REMOVED, record } from './actions.js';
 import { isResponder } from './roles.js';
-import { activityFeed, record } from './activity.js';
+import { formatRange } from './time.js';
 
 const MINUTE = 60_000;
+const VIA = { 'phone call': 'app', app: 'app', slack: 'slack', web: 'web', api: 'api' };
 
-export function requireAppUser(ctx) {
+function requireAppUser(ctx) {
   if (!ctx.user || !ctx.device) throw new HttpError(401, 'Sign in again');
 }
 
-export const initialsOf = (name) => String(name || '').trim().split(/\s+/).slice(0, 2).map((w) => w[0] || '').join('').toUpperCase();
+const initialsOf = (name) => String(name || '').trim().split(/\s+/).slice(0, 2).map((w) => w[0] || '').join('').toUpperCase();
 
-export const toPerson = (u) => (u ? { id: Number(u.id), name: u.name, initials: initialsOf(u.name), role: u.role } : null);
+const toPerson = (u) => (u ? { id: Number(u.id), name: u.name, initials: initialsOf(u.name), role: u.role } : null);
 
 /**
  * Where Google sign-in from the phone app ends: a pagerdiem://connect link the app opens.
  * Someone already on the team gets a pairing code; someone new gets a signed sign-up to finish
  * in the app (name, Slack, phone); a failure gets the message to show.
  */
-export function appSignInRedirect({ publicUrl, user, identity, error }) {
+export function appSignInRedirect({ publicUrl, user, identity, error, challenge }) {
   if (error) return `pagerdiem://connect?error=${encodeURIComponent(error)}`;
   const server = `server=${encodeURIComponent(publicUrl)}`;
-  if (user) return `pagerdiem://connect?${server}&code=${encodeURIComponent(pairingCode(user.id))}`;
-  return `pagerdiem://connect?${server}&pending=${encodeURIComponent(signPayload(identity, 1800))}`;
+  if (user) return `pagerdiem://connect?${server}&code=${encodeURIComponent(pairingCode(user.id, { challenge }))}`;
+  const pending = signPayload({ ...identity, ...(challenge ? { ch: challenge } : {}) }, 1800);
+  return `pagerdiem://connect?${server}&pending=${encodeURIComponent(pending)}`;
 }
 
 const TEST_CALL_MS = 10 * 60_000;
+
+/** Newest first: [{ at, text, via, icon }]. */
+export async function activityFeed({ db, rotation, shifts, limit = 200 }) {
+  const items = [];
+  for (const l of await rotation.log({ limit })) {
+    const range = formatRange(shifts.forKey(l.weekend_key), config.timezone);
+    if (l.action === 'swap') {
+      items.push({ at: l.at, text: `${l.user_name} took ${l.other_name}'s spot for ${range}${l.undone_at ? ' (undone)' : ''}`, via: null, icon: 'swap' });
+    } else {
+      items.push({ at: l.at, text: `${l.user_name} ${l.action === 'join' ? 'added themselves to' : 'left'} ${range}`, via: null, icon: l.action });
+    }
+  }
+  const handled = await db.all(`SELECT e.at, e.message, i.id, i.title FROM incident_events e JOIN incidents i ON i.id = e.incident_id
+    WHERE e.message LIKE 'Acknowledged by %' OR e.message LIKE 'Resolved by %' ORDER BY e.id DESC LIMIT ?`, [limit]);
+  for (const e of handled) {
+    const m = /^(Acknowledged|Resolved) by (.+) via (.+)$/.exec(e.message);
+    if (!m) continue;
+    const verb = m[1] === 'Acknowledged' ? 'acknowledged' : 'resolved';
+    items.push({ at: e.at, text: `${m[2]} ${verb} #${e.id} ${e.title}`, via: VIA[m[3]] ?? null, icon: verb === 'acknowledged' ? 'ack' : 'resolve' });
+  }
+  for (const a of await db.all('SELECT at, via, icon, text FROM admin_log ORDER BY id DESC LIMIT ?', [limit])) {
+    items.push({ at: a.at, text: a.text, via: a.via ?? null, icon: a.icon });
+  }
+  return items.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)).slice(0, limit);
+}
 
 const joinNames = (people) => (people.length < 2 ? people.map((p) => p.name).join('')
   : `${people.slice(0, -1).map((p) => p.name).join(', ')} and ${people[people.length - 1].name}`);
 
 /** Incident rows as the phone app's IncidentSummary. */
-export async function toIncidents(db, rows) {
+async function toIncidents(db, rows) {
   if (!rows.length) return [];
   const users = new Map((await db.all('SELECT id, name, role FROM users')).map((u) => [Number(u.id), u]));
   const repeats = new Map((await db.all(`SELECT incident_id, COUNT(*) AS n FROM incident_events
@@ -52,7 +79,7 @@ export async function toIncidents(db, rows) {
   }));
 }
 
-export const toWeekend = (entry, user) => ({
+const toWeekend = (entry, user) => ({
   key: entry.shift.key, start: entry.shift.start.toISOString(), end: entry.shift.end.toISOString(),
   people: entry.people.map(toPerson), count: entry.shift.count, needsCover: Boolean(entry.needsCover),
   mine: entry.people.some((p) => p.id === user.id),
@@ -108,7 +135,7 @@ export function escalationPlan(inc, now, who) {
   });
 }
 
-export function registerAppApi({ router, db, shifts, rotation, incidents, actions, devices, members, notify }) {
+export function registerAppApi({ router, db, shifts, rotation, incidents, actions, devices, notify }) {
   // Test calls waiting to be answered: callId -> { deviceId, at }. Kept in memory: a restart
   // only means pressing "Ring me now" again.
   const testCalls = new Map();
@@ -130,7 +157,7 @@ export function registerAppApi({ router, db, shifts, rotation, incidents, action
   router.post('/api/app/pair', async (ctx) => {
     const { code, platform, deviceName } = ctx.body;
     if (!PLATFORMS.includes(platform)) throw new HttpError(400, 'Unknown platform. Use ios or android.');
-    const userId = await redeemPairingCode(db, String(code || ''));
+    const userId = await redeemPairingCode(db, String(code || ''), ctx.body.verifier);
     const user = userId ? await rotation.userById(userId) : null;
     if (!user) throw new HttpError(401, 'This code has expired or was already used. Make a new one on the Team page.');
     if (!user.active) throw new HttpError(401, REMOVED);
@@ -143,8 +170,10 @@ export function registerAppApi({ router, db, shifts, rotation, incidents, action
     const { pending, name, slack, phone, platform, deviceName } = ctx.body;
     if (!PLATFORMS.includes(platform)) throw new HttpError(400, 'Unknown platform. Use ios or android.');
     const identity = readPayload(String(pending || ''));
-    if (!identity?.email) throw new HttpError(401, 'This sign-up has expired. Sign in with Google again.');
-    const { user, error } = await members.createMember({ name, email: identity.email, slack, whatsapp: phone, passwordHash: 'google' });
+    if (!identity?.email || (identity.ch && !verifierMatches(identity.ch, ctx.body.verifier))) {
+      throw new HttpError(401, 'This sign-up has expired. Sign in with Google again.');
+    }
+    const { user, error } = await actions.createMember({ name, email: identity.email, slack, whatsapp: phone, passwordHash: 'google' });
     if (error) throw new HttpError(400, error.message, error.field === 'whatsapp' ? 'phone' : error.field);
     const { device, token } = await devices.create(user.id, { platform, name: deviceName });
     ctx.r.json({ token, me: me(user, device) }, 201);
@@ -349,7 +378,7 @@ export function registerAppApi({ router, db, shifts, rotation, incidents, action
 
   router.post('/api/app/profile', async (ctx) => {
     requireAppUser(ctx);
-    const { user, error } = await members.updateProfile(ctx.user, { name: ctx.body.name, slack: ctx.body.slack, phone: ctx.body.phone });
+    const { user, error } = await actions.updateProfile(ctx.user, { name: ctx.body.name, slack: ctx.body.slack, phone: ctx.body.phone });
     if (error) throw new HttpError(400, error.message, error.field);
     ctx.r.json(me(user, ctx.device));
   });

@@ -19,11 +19,9 @@ import { HttpError, readBody, parseBody, makeResponder, makeRouter } from './htt
 import * as views from './views.js';
 import { normalizeCoverage, readSetting } from './settings.js';
 import { isRole, isAdmin, isResponder } from './roles.js';
-import { makeMembers, EMAIL, REMOVED } from './members.js';
-import { makeActions } from './actions.js';
-import { makeDevices } from './devices.js';
+import { makeActions, EMAIL, REMOVED } from './actions.js';
+import { makeDevices, CHALLENGE } from './devices.js';
 import { registerAppApi, appSignInRedirect } from './app-api.js';
-import { qrSvg } from './qr.js';
 
 const safeBack = (value, fallback) => (/^\/(?![/\\])[^\r\n\\]*$/.test(String(value || '')) ? value : fallback);
 
@@ -34,10 +32,9 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   const incidents = makeIncidents({ db, rotation, notify });
   const scheduler = makeScheduler({ db, shifts, rotation, notify, incidents });
   const ping = makePing({ db, rotation, post: pingPost ?? slackPost, fetchImpl: pingFetch });
-  const members = makeMembers({ db, rotation, notify });
   const actions = makeActions({ db, shifts, rotation, notify, scheduler });
   const devices = makeDevices(db);
-  const { userCount, userByEmail, userBySlack, createMember } = members;
+  const { userCount, userByEmail, userBySlack, createMember } = actions;
   const router = makeRouter();
   const fmt = (d) => formatLocal(d, config.timezone);
 
@@ -172,9 +169,12 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   router.get('/auth/google', async (ctx) => {
     if (!googleEnabled()) throw new HttpError(404, 'Not found');
     const state = crypto.randomBytes(16).toString('hex');
-    // ?app=1: the phone app opened this sign-in and gets the result back as a pagerdiem:// link.
+    // ?app=1: the phone app opened this sign-in and gets the result back as a pagerdiem:// link. It
+    // must send a challenge, so only the app that started the sign-in can use what comes back.
     const app = ctx.query.get('app') === '1';
-    ctx.r.cookie(tempCookie(OAUTH_COOKIE, signPayload({ state, ...(app ? { app: true } : {}) }, 600), 600));
+    const challenge = ctx.query.get('challenge') || '';
+    if (app && !CHALLENGE.test(challenge)) throw new HttpError(400, 'This sign-in is missing its security check. Update the PagerDiem app and try again.');
+    ctx.r.cookie(tempCookie(OAUTH_COOKIE, signPayload({ state, ...(app ? { app: true, ch: challenge } : {}) }, 600), 600));
     ctx.r.redirect(google.authorizeUrl(state), 302);
   });
 
@@ -199,7 +199,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
       // The phone gets a pairing code (or, for someone new, a signed sign-up to finish in the app).
       return ctx.r.redirect(existing && !existing.active
         ? appSignInRedirect({ error: REMOVED })
-        : appSignInRedirect({ publicUrl: config.publicUrl, user: existing, identity }), 302);
+        : appSignInRedirect({ publicUrl: config.publicUrl, user: existing, identity, challenge: saved.ch }), 302);
     }
     if (existing) {
       if (!existing.active) throw new HttpError(403, REMOVED);
@@ -384,7 +384,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     const link = appSignInRedirect({ publicUrl: config.publicUrl, user: ctx.user });
     ctx.r.html(views.teamPage({
       user: ctx.user, role, members: (await rotation.activeMembers()),
-      phoneApp: { qr: qrSvg(link), phones: await devices.listForUser(ctx.user.id) },
+      phoneApp: { qr: views.qrSvg(link), phones: await devices.listForUser(ctx.user.id) },
       inactive: (await db.all('SELECT * FROM users WHERE active = 0 ORDER BY name')),
       flash: takeFlash(ctx),
     }));
@@ -424,7 +424,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
 
   router.post('/profile', async (ctx) => {
     if (!requireUser(ctx)) return;
-    const { error } = await members.updateProfile(ctx.user, { name: ctx.body.name, slack: ctx.body.slack, phone: ctx.body.whatsapp });
+    const { error } = await actions.updateProfile(ctx.user, { name: ctx.body.name, slack: ctx.body.slack, phone: ctx.body.whatsapp });
     setFlash(ctx.r, error ? 'error' : 'ok', error ? error.message : 'Saved.');
     ctx.r.redirect('/team');
   });
@@ -610,7 +610,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
 
   router.get('/healthz', async (ctx) => ctx.r.json({ ok: true }));
 
-  registerAppApi({ router, db, shifts, rotation, incidents, notify, actions, members, devices, scheduler });
+  registerAppApi({ router, db, shifts, rotation, incidents, notify, actions, devices });
 
   // ---------- server ----------
   // Browsers send Sec-Fetch-Site / Origin on form posts. Slack and the API authenticate with a

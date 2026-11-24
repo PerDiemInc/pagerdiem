@@ -1,7 +1,7 @@
 // Phones signed in to the PagerDiem app: sign-in tokens, push tokens and wake-up checks.
 // A phone signs in by scanning a one-time pairing code from the web Team page.
 import crypto from 'node:crypto';
-import { signPayload, readPayload } from './auth.js';
+import { signPayload, readPayload, safeEqual } from './auth.js';
 import { claimOnce } from './db.js';
 import { HttpError } from './http.js';
 
@@ -13,15 +13,27 @@ const CHECKS = ['notifications', 'focus', 'ringer', 'fullScreen', 'dndAccess'];
 const hash = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 const cleanDeviceName = (value) => String(value || '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').trim().slice(0, 60) || 'Phone';
 
-/** A one-time code that signs this person's phone in. Valid for 10 minutes. */
-export function pairingCode(userId) {
-  return signPayload({ uid: userId, nonce: crypto.randomBytes(12).toString('hex') }, PAIRING_SECONDS);
+/** What the app sends when it starts a sign-in: base64url(sha256(verifier)), as in OAuth PKCE. */
+export const challengeFor = (verifier) => crypto.createHash('sha256').update(String(verifier)).digest('base64url');
+export const CHALLENGE = /^[A-Za-z0-9_-]{43}$/;
+
+/** Does the verifier the app sent match the challenge it started the sign-in with? */
+export const verifierMatches = (challenge, verifier) => Boolean(verifier) && safeEqual(challengeFor(verifier), challenge);
+
+/**
+ * A one-time code that signs this person's phone in. Valid for 10 minutes. A code that travels
+ * back to the app through a pagerdiem:// link carries the app's challenge, so another app that
+ * catches the link can't use it without the verifier only the real app holds.
+ */
+export function pairingCode(userId, { challenge } = {}) {
+  return signPayload({ uid: userId, nonce: crypto.randomBytes(12).toString('hex'), ...(challenge ? { ch: challenge } : {}) }, PAIRING_SECONDS);
 }
 
-/** The user id a pairing code was made for, or null if it's invalid, expired or already used. */
-export async function redeemPairingCode(db, code) {
+/** The user id a pairing code was made for, or null if it's invalid, expired, already used or the verifier is wrong. */
+export async function redeemPairingCode(db, code, verifier) {
   const payload = readPayload(code);
   if (!payload?.uid || !payload.nonce) return null;
+  if (payload.ch && !verifierMatches(payload.ch, verifier)) return null; // checked before the code is spent
   if (!(await claimOnce(db, `pair:${payload.nonce}`))) return null;
   return Number(payload.uid);
 }

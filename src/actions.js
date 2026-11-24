@@ -1,15 +1,88 @@
-// Weekend, team and settings changes shared by the web app and the phone app. Each action
-// checks who may do it, makes the change, tells Slack, and returns the message to show.
-// A rule violation throws HttpError(status, message).
-import { config } from './config.js';
+// Sign-up, profile, weekend, team and settings changes shared by the web app and the phone app.
+// Each action checks who may do it, makes the change, tells Slack, and returns the message to
+// show. A rule violation throws HttpError(status, message).
+import { config, slackEnabled } from './config.js';
 import { HttpError } from './http.js';
 import { formatRange, parseKey } from './time.js';
-import { mention } from './notify/slack.js';
+import { lookupUserIdByEmail, mention } from './notify/slack.js';
+import { normalizePhone } from './phone.js';
 import { PRESETS, normalizeCoverage, writeSetting, describeDays } from './settings.js';
-import { isAdmin, isResponder, isRole } from './roles.js';
-import { record } from './activity.js';
+import { DEFAULT_ROLE, isAdmin, isResponder, isRole } from './roles.js';
+
+const cleanName = (value) => String(value || '').replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+const SLACK_ID = /^[UW][A-Z0-9]{6,}$/;
+export const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const REMOVED = "You've been removed from the on-call rotation, so you can't sign in. Ask an admin to add you back.";
+
+/** Record a team, settings or app change for the activity log. */
+export async function record(db, { user, via = null, icon, text, now = new Date() }) {
+  await db.run('INSERT INTO admin_log (at, user_id, via, icon, text) VALUES (?, ?, ?, ?, ?)',
+    [now.toISOString(), user?.id ?? null, via, icon, text]);
+}
 
 export function makeActions({ db, shifts, rotation, notify, scheduler }) {
+  const userCount = async () => (await db.get('SELECT COUNT(*) AS n FROM users')).n;
+  const userByEmail = async (email) => (await db.get('SELECT * FROM users WHERE email = ?', [email]));
+  const userBySlack = async (id) => (id ? (await db.get('SELECT * FROM users WHERE slack_user_id = ?', [id])) : null);
+  const userByPhone = async (phone) => (phone ? (await db.get('SELECT * FROM users WHERE whatsapp = ?', [phone])) : null);
+
+  /** Turn "U0123ABCD" or an email into a Slack member ID (when Slack is connected). */
+  async function resolveSlack(value, fallbackEmail) {
+    const v = String(value || '').trim() || fallbackEmail;
+    if (SLACK_ID.test(v.toUpperCase())) return v.toUpperCase();
+    if (!slackEnabled()) return v || null; // dry-run: keep what they typed, relinked once Slack is connected
+    return EMAIL.test(v) ? lookupUserIdByEmail(v) : null;
+  }
+
+  /** Someone else already uses this Slack account or phone number? Returns { field, message } or null. */
+  async function contactClash({ slackId, whatsapp, exceptId = null }) {
+    const bySlack = await userBySlack(slackId);
+    if (bySlack && bySlack.id !== exceptId) return { field: 'slack', message: `That Slack account already belongs to ${bySlack.name}. Use your own Slack account.` };
+    const byPhone = await userByPhone(whatsapp);
+    if (byPhone && byPhone.id !== exceptId) return { field: 'whatsapp', message: `That phone number already belongs to ${byPhone.name}. Use your own number.` };
+    return null;
+  }
+
+  /**
+   * Validate and add a team member. Each person must have their own Slack account and
+   * phone number. Returns { user, isFirst } or { error }.
+   */
+  async function createMember({ name, email, slack, whatsapp: rawPhone, passwordHash }) {
+    name = cleanName(name);
+    const whatsapp = normalizePhone(rawPhone);
+    if (!name) return { error: { field: 'name', message: 'Please enter your name.' } };
+    if (!whatsapp) return { error: { field: 'whatsapp', message: 'Please enter your phone number with country code, e.g. +1 415 555 0123.' } };
+    if (await userByEmail(email)) return { error: { field: 'email', message: 'That email is already signed up — log in instead.' } };
+    const slackId = await resolveSlack(slack, email);
+    if (!slackId) return { error: { field: 'slack', message: "We couldn't find you on Slack. Enter your Slack member ID (Slack profile → ⋮ → Copy member ID)." } };
+    const clash = await contactClash({ slackId, whatsapp });
+    if (clash) return { error: clash };
+
+    const isFirst = (await userCount()) === 0;
+    const role = isFirst ? 'admin' : DEFAULT_ROLE;
+    const { id } = await db.get(`INSERT INTO users (name, email, password_hash, slack_user_id, whatsapp, is_admin, role, rotation_order)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    [name, email, passwordHash, slackId, whatsapp, isFirst ? 1 : 0, role, await rotation.nextRotationOrder()]);
+    const user = await rotation.userById(Number(id));
+    if (isResponder(user)) await notify.channel({ text: `:wave: ${mention(user)} joined the weekend on-call rotation.` });
+    return { user, isFirst };
+  }
+
+  /** Change your own name, phone number and Slack account. Returns { user } or { error }. */
+  async function updateProfile(user, { name, slack, phone }) {
+    name = cleanName(name);
+    const whatsapp = normalizePhone(phone);
+    if (!name || !whatsapp) {
+      return { error: { field: name ? 'phone' : 'name', message: 'Name and a phone number with country code are required.' } };
+    }
+    const slackId = await resolveSlack(slack, user.email);
+    if (!slackId) return { error: { field: 'slack', message: "Couldn't find that Slack account. Paste your Slack member ID instead." } };
+    const clash = await contactClash({ slackId, whatsapp, exceptId: user.id });
+    if (clash) return { error: { ...clash, field: clash.field === 'whatsapp' ? 'phone' : clash.field } };
+    await db.run('UPDATE users SET name = ?, whatsapp = ?, slack_user_id = ? WHERE id = ?', [name, whatsapp, slackId, user.id]);
+    return { user: await rotation.userById(user.id) };
+  }
+
   const requireAdmin = (user) => {
     if (!isAdmin(user)) throw new HttpError(403, 'Only admins can do that');
   };
@@ -27,6 +100,8 @@ export function makeActions({ db, shifts, rotation, notify, scheduler }) {
   // Rotation rules throw plain errors with a status; keep the status and the message.
   const asHttp = (err) => (err instanceof HttpError ? err : new HttpError(err.status || 500, err.message));
   const range = (shift) => formatRange(shift, config.timezone);
+  // Ids come from URLs and JSON bodies: anything that isn't a whole number is nobody.
+  const personById = async (id) => (Number.isSafeInteger(Number(id)) ? rotation.userById(Number(id)) : null);
   const activeAdmins = async () => (await db.get("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1")).n;
 
   // Add or remove YOURSELF for a weekend. There is deliberately no way to change anyone else.
@@ -71,7 +146,7 @@ export function makeActions({ db, shifts, rotation, notify, scheduler }) {
   async function swapWeekend(user, key, replacedId, via, now = new Date()) {
     requireResponder(user);
     const shift = shiftFor(key);
-    const replaced = await rotation.userById(Number(replacedId));
+    const replaced = await personById(replacedId);
     if (!replaced) throw new HttpError(400, 'Pick someone on that weekend.');
     let row;
     try {
@@ -87,6 +162,7 @@ export function makeActions({ db, shifts, rotation, notify, scheduler }) {
   }
 
   async function undoSwap(user, ids, via, now = new Date()) {
+    if (!ids.length || !ids.every((id) => Number.isSafeInteger(Number(id)))) throw new HttpError(400, 'Nothing to undo.');
     let undone = false;
     try {
       for (const id of ids) undone = (await rotation.undoSwap(Number(id), user, now)) || undone;
@@ -101,7 +177,7 @@ export function makeActions({ db, shifts, rotation, notify, scheduler }) {
     requireResponder(user);
     const mine = shiftFor(myKey);
     const theirs = shiftFor(theirKey);
-    const other = await rotation.userById(Number(otherId));
+    const other = await personById(otherId);
     if (!other) throw new HttpError(400, 'Pick someone to trade with.');
     let rows;
     try {
@@ -152,9 +228,9 @@ export function makeActions({ db, shifts, rotation, notify, scheduler }) {
 
   async function setActive(user, targetId, active, via) {
     requireAdmin(user);
-    const id = Number(targetId);
-    const target = await rotation.userById(id);
+    const target = await personById(targetId);
     if (!target) throw new HttpError(404, 'Person not found');
+    const { id } = target;
     if (!active && target.role === 'admin' && target.active && (await activeAdmins()) <= 1) {
       throw new HttpError(409, 'There must be at least one admin. Make someone else an admin first.');
     }
@@ -168,7 +244,7 @@ export function makeActions({ db, shifts, rotation, notify, scheduler }) {
     requireAdmin(user);
     role = String(role || '');
     if (!isRole(role)) throw new HttpError(400, 'Pick a role.');
-    const target = await rotation.userById(Number(targetId));
+    const target = await personById(targetId);
     if (!target) throw new HttpError(404, 'Person not found');
     if (target.role === 'admin' && role !== 'admin' && (await activeAdmins()) <= 1) {
       throw new HttpError(409, 'There must be at least one admin.');
@@ -181,7 +257,7 @@ export function makeActions({ db, shifts, rotation, notify, scheduler }) {
 
   async function moveMember(user, targetId, dir, via) {
     requireAdmin(user);
-    const target = await rotation.userById(Number(targetId));
+    const target = await personById(targetId);
     if (!target) throw new HttpError(404, 'Person not found');
     const step = Number(dir) < 0 ? -1 : 1;
     await rotation.move(target.id, step);
@@ -194,7 +270,7 @@ export function makeActions({ db, shifts, rotation, notify, scheduler }) {
     requireAdmin(user);
     const preset = PRESETS[input.preset];
     const { coverage, error } = normalizeCoverage({
-      days: preset ? preset.days : input.days,
+      days: preset ? preset.days : Array.isArray(input.days) ? input.days : [],
       start: input.start, end: input.end, weekendCount: input.weekendCount, weekdayCount: input.weekdayCount,
     });
     if (error) throw new HttpError(400, error);
@@ -232,6 +308,7 @@ export function makeActions({ db, shifts, rotation, notify, scheduler }) {
   }
 
   return {
+    createMember, contactClash, resolveSlack, updateProfile, userCount, userByEmail, userBySlack,
     askCover, joinWeekend, leaveWeekend, swapWeekend, tradeWeekends, undoSwap, announceSwaps, announceMissedSwaps,
     setActive, setRole, moveMember, saveCoverage, resendWeekendStart,
   };

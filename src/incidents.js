@@ -341,6 +341,7 @@ export function makeIncidents({ db, rotation, notify }) {
   /** Page everyone responsible right now instead of waiting for the next re-page. */
   async function callAgain(id, user, now = new Date()) {
     const inc = await getPaging(id);
+    if (now - new Date(inc.last_paged_at) < MINUTE) throw new HttpError(429, 'Everyone was called less than a minute ago.');
     const who = await responsibleFor(inc);
     if (!who || !who.responders.length) throw new HttpError(409, 'Nobody is on call right now, so there is nobody to call.');
     const targets = (inc.escalation_level === 0 ? who.responders : [...who.responders, who.backup]).filter(Boolean);

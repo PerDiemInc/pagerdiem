@@ -22,12 +22,11 @@ const { makeRotation } = await import('../src/rotation.js');
 const { makeNotifier } = await import('../src/notify/index.js');
 const { makeIncidents } = await import('../src/incidents.js');
 const { makeScheduler } = await import('../src/scheduler.js');
-const { makeActions } = await import('../src/actions.js');
-const { qrSvg } = await import('../src/qr.js');
-const { appSignInRedirect, buildHome, escalationPlan } = await import('../src/app-api.js');
-const { activityFeed, record } = await import('../src/activity.js');
+const { makeActions, record } = await import('../src/actions.js');
+const { qrSvg } = await import('../src/views.js');
+const { appSignInRedirect, buildHome, escalationPlan, activityFeed } = await import('../src/app-api.js');
 const { readPayload } = await import('../src/auth.js');
-const { makeDevices } = await import('../src/devices.js');
+const { makeDevices, pairingCode, redeemPairingCode, challengeFor } = await import('../src/devices.js');
 
 const shifts = makeShifts(config);
 const at = (iso) => new Date(iso);
@@ -1132,4 +1131,98 @@ test('trade: announced exactly once even when two announcers each claim one half
   sent.length = 0;
   await actions.announceSwaps(new Date(t0.getTime() + 33_000)); // this run holds the first half
   assert.equal(sent.filter((m) => m.to === 'CONCALL' && /traded weekends/.test(m.text)).length, 1, 'posted even though the other half was claimed elsewhere');
+});
+
+test('app sign-in binding: a code made for a challenge needs the matching verifier, checked before the code is spent', async () => {
+  const { db } = await setup();
+  const verifier = 'x'.repeat(43);
+  const challenge = challengeFor(verifier);
+  const code = pairingCode(7, { challenge });
+  assert.equal(await redeemPairingCode(db, code), null, 'no verifier: another app caught the link');
+  assert.equal(await redeemPairingCode(db, code, 'y'.repeat(43)), null, 'wrong verifier');
+  assert.equal(await redeemPairingCode(db, code, verifier), 7, 'the app that asked can still use it');
+  assert.equal(await redeemPairingCode(db, code, verifier), null, 'still single use');
+  assert.equal(await redeemPairingCode(db, pairingCode(8)), 8, 'a QR code from the Team page needs no verifier');
+
+  const params = (link) => new URL(link).searchParams;
+  const link = appSignInRedirect({ publicUrl: 'https://pd.example.com', user: { id: 9 }, challenge });
+  assert.equal(readPayload(params(link).get('code')).ch, challenge);
+  const pending = appSignInRedirect({ publicUrl: 'https://pd.example.com', identity: { email: 'n@example.com', name: 'N' }, challenge });
+  assert.equal(readPayload(params(pending).get('pending')).ch, challenge);
+});
+
+test('call everyone again waits a minute between calls, so nobody can ring the team over and over', async () => {
+  const { incidents, users } = await callsSetup();
+  const t0 = at('2026-11-21T15:00:00Z');
+  const inc = await incidents.create({ title: 'Checkout down' }, t0);
+  await assert.rejects(incidents.callAgain(inc.id, users[2], after(t0, 0.5)), { status: 429, message: 'Everyone was called less than a minute ago.' });
+  await incidents.callAgain(inc.id, users[2], after(t0, 3));
+  await assert.rejects(incidents.callAgain(inc.id, users[2], after(t0, 3.5)), { status: 429 });
+  await incidents.callAgain(inc.id, users[2], after(t0, 4.1));
+});
+
+test('escalation plan on a weekday and for a post-only incident', async () => {
+  const { incidents } = await callsSetup();
+  const t0 = at('2026-11-25T15:00:00Z'); // Wednesday: nobody is on call
+  const weekday = await incidents.create({ title: 'Checkout down' }, t0);
+  assert.deepEqual(escalationPlan(weekday, after(t0, 5), await incidents.responsibleFor(weekday)).map((s) => [s.label, s.state]),
+    [['@here in #on-call', 'done'], ['Remind #on-call every 30 min', 'next']]);
+  const quiet = await incidents.create({ title: 'FYI', quiet: true }, t0);
+  assert.deepEqual(escalationPlan(quiet, after(t0, 5), null).map((s) => s.label), ['Posted in #on-call, nobody called']);
+});
+
+test('call the backup now with no backup alerts the whole channel instead', async () => {
+  const ctx = await setup();
+  await ctx.addUsers('Ana', 'Ben'); // both on call, nobody left to be the backup
+  config.slack.channel = 'CONCALL';
+  const incidents = makeIncidents({ db: ctx.db, rotation: ctx.rotation, notify: ctx.notify });
+  const t0 = at('2026-11-21T15:00:00Z');
+  const inc = await incidents.create({ title: 'Checkout down' }, t0);
+  ctx.sent.length = 0;
+  const ana = await ctx.rotation.userById(inc.assigned_user_id);
+  assert.deepEqual(await incidents.callBackupNow(inc.id, ana, after(t0, 1)), { paged: [] });
+  assert.ok(ctx.sent.some((m) => m.to === 'CONCALL' && m.text.includes('<!channel>')));
+  assert.equal((await incidents.get(inc.id)).escalation_level, 2);
+});
+
+test('actions: a one-way swap is announced once after the undo window; resend is logged', async () => {
+  const { actions, db, sent, cal, ana, iris } = await actionsSetup();
+  const t0 = at('2026-11-19T12:00:00Z');
+  await actions.swapWeekend(cal, '2026-11-20', ana.id, 'app', t0);
+  sent.length = 0;
+  await actions.announceSwaps(new Date(t0.getTime() + 13_000));
+  assert.equal(sent.filter((m) => m.to === 'CONCALL' && /took .*'s spot/.test(m.text)).length, 1);
+  assert.equal(sent.filter((m) => m.to === 'UANA000000').length, 1, 'Ana hears she is off');
+  await actions.announceSwaps(new Date(t0.getTime() + 20_000));
+  assert.equal(sent.filter((m) => m.to === 'CONCALL').length, 1, 'once');
+
+  const r = await actions.resendWeekendStart(iris, 'app', at('2026-11-21T12:00:00Z'));
+  assert.match(r.message, /^Re-sent "you're on call now" to /);
+  assert.ok((await db.all('SELECT text FROM admin_log')).some((l) => l.text === 'Iris re-sent the weekend message'));
+});
+
+test('phone calls with no push keys are recorded as dry-run, like Slack', async () => {
+  const ctx = await setup();
+  const [ana] = await ctx.addUsers('Ana');
+  const devices = makeDevices(ctx.db);
+  const { device } = await devices.create(ana.id, { platform: 'android', name: 'Pixel' });
+  await devices.update(device.id, { pushToken: 'fcm-1' });
+  const notify = makeNotifier(ctx.db); // no overrides and no FCM_SERVICE_ACCOUNT
+  const [result] = await notify.call(ana, { payload: { type: 'page', title: 'Checkout down' }, incidentId: null });
+  assert.deepEqual(result, { ok: true, dryRun: true });
+  const row = await ctx.db.get("SELECT * FROM notifications WHERE channel = 'push'");
+  assert.equal(row.status, 'dry-run');
+  assert.equal(row.device_id, device.id);
+});
+
+test('a phone that keeps using the app updates last seen at most once an hour', async () => {
+  const ctx = await setup();
+  const [ana] = await ctx.addUsers('Ana');
+  const devices = makeDevices(ctx.db);
+  const t0 = at('2026-11-24T10:00:00Z');
+  const { device, token } = await devices.create(ana.id, { platform: 'ios', name: 'iPhone' }, t0);
+  await devices.authenticate(token, after(t0, 30));
+  assert.equal((await devices.get(device.id)).last_seen_at, t0.toISOString(), 'no write within the hour');
+  await devices.authenticate(token, after(t0, 61));
+  assert.equal((await devices.get(device.id)).last_seen_at, after(t0, 61).toISOString());
 });

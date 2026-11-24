@@ -6,7 +6,7 @@ process.env.ALLOWED_EMAIL_DOMAINS = 'example.com';
 
 const { freshDb } = await import('./helpers.js');
 const { createApp } = await import('../src/app.js');
-const { pairingCode } = await import('../src/devices.js');
+const { pairingCode, challengeFor } = await import('../src/devices.js');
 const { signPayload } = await import('../src/auth.js');
 const { config } = await import('../src/config.js');
 
@@ -297,4 +297,40 @@ test("non-technical people can't read the team's phone numbers", async () => {
   const { token, me } = await res.json();
   assert.equal(me.user.role, 'non_technical');
   assert.equal((await getJson('/api/app/team', token)).status, 403);
+});
+
+test("a sign-in the app started with Google needs the app's verifier", async () => {
+  const verifier = 'v'.repeat(20) + 'w'.repeat(23);
+  const ch = challengeFor(verifier);
+  const code = pairingCode(people.ana.id, { challenge: ch });
+  assert.equal((await postJson('/api/app/pair', { code, platform: 'ios' })).status, 401);
+  assert.equal((await postJson('/api/app/pair', { code, platform: 'ios', verifier })).status, 200);
+
+  const pending = signPayload({ email: 'pia@example.com', name: 'Pia', ch }, 60);
+  const body = { pending, name: 'Pia', slack: 'U0PIA12345', phone: '+14155550192', platform: 'android' };
+  assert.equal((await postJson('/api/app/signup', body)).status, 401);
+  assert.equal((await postJson('/api/app/signup', { ...body, verifier: 'z'.repeat(43) })).status, 401);
+  assert.equal((await postJson('/api/app/signup', { ...body, verifier })).status, 201);
+});
+
+test('malformed ids and bodies are rejected cleanly, never a server error', async () => {
+  const iris = await signIn(people.iris);
+  const ben = await signIn(people.ben);
+  for (const action of ['role', 'active', 'move']) {
+    assert.equal((await postJson(`/api/app/team/abc/${action}`, { role: 'admin', active: true, dir: 1 }, iris)).status, 404, action);
+  }
+  assert.equal((await postJson('/api/app/swaps/undo', { ids: ['x'] }, ben)).status, 400);
+  const { weekends } = await (await getJson('/api/app/schedule', ben)).json();
+  const key = weekends[weekends.length - 1].key;
+  assert.equal((await postJson(`/api/app/weekends/${key}/swap`, { userId: 'x' }, ben)).status, 400);
+  assert.equal((await postJson(`/api/app/weekends/${key}/trade`, { theirKey: weekends[weekends.length - 2].key, userId: 'x' }, ben)).status, 400);
+  assert.equal((await postJson('/api/app/coverage', { days: 'x', start: '18:00', end: '09:00', weekendCount: 2, weekdayCount: 2 }, iris)).status, 400);
+  assert.equal((await postJson('/api/app/incidents/1.5/ack', {}, ben)).status, 404);
+});
+
+test('profile errors name the field to fix', async () => {
+  const ben = await signIn(people.ben);
+  const res = await postJson('/api/app/profile', { name: '  ', slack: 'UBEN000000', phone: '+14155550101' }, ben);
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).field, 'name');
 });
