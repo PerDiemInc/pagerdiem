@@ -3,7 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 
 import { fakeServer, renderScreen } from '@/test-utils';
 
-import { ana, eli, home, incident, me } from '@/test-fixtures';
+import { ana, detail, eli, home, incident, me } from '@/test-fixtures';
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => true) };
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
@@ -67,4 +67,12 @@ test('opened from a link with nothing behind it, Cancel goes to On call', async 
   expect(mockRouter.back).not.toHaveBeenCalled();
   expect(mockRouter.replace).toHaveBeenCalledWith('/');
   mockRouter.canGoBack.mockReturnValue(true);
+});
+
+test('after paging, the sent screen says who picked it up', async () => {
+  await show({ 'GET /api/app/incidents/15': detail({ status: 'acknowledged', ackedBy: ana, ackedAt: new Date().toISOString() }) });
+  await fireEvent.press(await screen.findByRole('button', { name: 'Checkout failing' }));
+  await fireEvent(screen.getByRole('button', { name: 'Hold to call Ana' }), 'accessibilityAction', activate);
+  expect(await screen.findByText('Calling Ana Gomez')).toBeTruthy();
+  expect(await screen.findByText('Ana Gomez acknowledged. Paging stopped.')).toBeTruthy();
 });

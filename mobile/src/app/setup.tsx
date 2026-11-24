@@ -41,7 +41,7 @@ function stepsFor(platform: Me['device']['platform']): Step[] {
     notifications,
     {
       id: 'focus', title: 'Let PagerDiem through Focus', text: 'In Settings › Focus, add PagerDiem to Allowed Apps for Sleep and Do Not Disturb.',
-      cta: 'Open Focus settings', confirm: 'I’ve added PagerDiem', run: () => Linking.openSettings(),
+      cta: 'Open Settings', confirm: 'I’ve added PagerDiem', run: () => Linking.openSettings(),
     },
     { id: 'ringer', title: 'Keep the ringer on', text: 'iPhone calls follow your ringer. Leave it on while you’re on call.', cta: 'Done' },
     test,

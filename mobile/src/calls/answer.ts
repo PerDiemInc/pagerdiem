@@ -10,11 +10,12 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export type Notice = { title: string; body: string; path: string };
 
-export async function onAnswer(payload: RingingPayload, { post, endCall, navigate, notify }: {
+export async function onAnswer(payload: RingingPayload, { post, endCall, navigate, notify, meId }: {
   post: (path: string, body: unknown) => Promise<unknown>;
   endCall: (callId: string) => void;
   navigate: (path: string) => void;
   notify: (notice: Notice) => void;
+  meId?: number;
 }) {
   // The call stays up until the acknowledgement settles: iOS keeps a live call's app running, and
   // may suspend it as soon as the call ends, before a retry or the notice.
@@ -26,19 +27,20 @@ export async function onAnswer(payload: RingingPayload, { post, endCall, navigat
     }
     const path = `/page/${payload.incidentId}`;
     navigate(path);
-    notify(await acknowledge(payload, post, path));
+    notify(await acknowledge(payload, post, path, meId));
   } finally {
     endCall(payload.callId);
   }
 }
 
-async function acknowledge(payload: RingingPayload, post: (path: string, body: unknown) => Promise<unknown>, path: string): Promise<Notice> {
+async function acknowledge(payload: RingingPayload, post: (path: string, body: unknown) => Promise<unknown>, path: string, meId?: number): Promise<Notice> {
   for (let attempt = 0; ; attempt++) {
     try {
       const result = (await post(`/api/app/incidents/${payload.incidentId}/ack`, { via: 'call' })) as {
-        changed: boolean; incident: { ackedBy: { name: string } | null };
+        changed: boolean; incident: { ackedBy: { id?: number; name: string } | null };
       };
-      return result.changed
+      // Already yours: an earlier try that timed out on the phone had reached the server.
+      return result.changed || (meId !== undefined && result.incident.ackedBy?.id === meId)
         ? { title: `Acknowledged · ${payload.title}`, body: 'Paging stopped. Tap to open.', path }
         : { title: `Already acknowledged · ${payload.title}`, body: `${result.incident.ackedBy?.name ?? 'Someone else'} has it. Tap to open.`, path };
     } catch (err) {

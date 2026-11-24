@@ -83,11 +83,14 @@ function WakingYouUp({ me }: { me: Me }) {
       <Card>
         <Row Icon={ShieldCheck} title="Wake-up checks" right={<Pill label={allGood ? 'All good' : 'Needs a look'} tone={allGood ? 'green' : 'orange'} />} onPress={() => router.push('/setup')} />
         <Row Icon={PhoneIncoming} title="Ring me now" sub={me.device.testedAt ? `Last answered ${formatDate(me.device.testedAt, me.team.timezone)}` : 'Not tested yet'} onPress={ringMe} />
-        <Row Icon={Music} title="Ringtone" sub={tone.label} onPress={pickTone} />
+        <Row Icon={Music} title="Ringtone" sub={tone.label} onPress={pickTone} last={Platform.OS !== 'android'} />
+        {/* iPhone calls follow the phone's own ringer and vibration settings. */}
         {Platform.OS === 'android' ? (
-          <Row Icon={Volume2} title="Ring at full volume" right={<Toggle label="Ring at full volume" value={ring.loud} onChange={(loud) => setRing({ loud })} />} />
+          <>
+            <Row Icon={Volume2} title="Ring at full volume" right={<Toggle label="Ring at full volume" value={ring.loud} onChange={(loud) => setRing({ loud })} />} />
+            <Row Icon={Vibrate} title="Vibrate" right={<Toggle label="Vibrate" value={ring.vibrate} onChange={(vibrate) => setRing({ vibrate })} />} last />
+          </>
         ) : null}
-        <Row Icon={Vibrate} title="Vibrate" right={<Toggle label="Vibrate" value={ring.vibrate} onChange={(vibrate) => setRing({ vibrate })} />} last />
       </Card>
       <AppText variant="foot" tone="secondary" style={{ paddingHorizontal: Spacing.one }}>
         Full volume works on Android, even on silent. iPhone calls follow your ringer, so leave it on while you’re on call.

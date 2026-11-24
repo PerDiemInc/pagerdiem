@@ -7,7 +7,6 @@
     "@expo-google-fonts/geist-mono": "^0.4.3",
     "@expo/ui": "~58.0.29",
     "@tanstack/react-query": "^5.108.4",
-    "@types/jest": "30.0.0",
     "expo": "~58.0.26",
     "expo-camera": "~58.0.14",
     "expo-clipboard": "~58.0.4",
@@ -27,8 +26,6 @@
     "expo-symbols": "~58.0.5",
     "expo-system-ui": "~58.0.7",
     "expo-web-browser": "~58.1.0",
-    "jest": "~30.5.2",
-    "jest-expo": "~58.0.15",
     "lucide-react-native": "^1.79.0",
     "react": "19.3.0",
     "react-native": "0.88.1",
@@ -43,14 +40,16 @@
   },
   "devDependencies": {
     "@testing-library/react-native": "^14.1.0",
+    "@types/jest": "30.0.0",
     "@types/react": "~19.3.0",
+    "jest": "~30.5.2",
+    "jest-expo": "~58.0.15",
     "typescript": "~6.0.3"
   },
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "lint": "expo lint",
     "test": "jest",
     "typecheck": "tsc --noEmit"
   },

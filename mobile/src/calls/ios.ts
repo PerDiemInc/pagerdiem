@@ -42,6 +42,7 @@ export type CallContext = {
   server: string;
   publicUrl?: string;
   timezone: string;
+  meId?: number;
 };
 
 const host = (url: string) => {
@@ -118,7 +119,7 @@ export function startIosCalls({ context, navigate, ringtone }: { context: () => 
     call.stop();
     ringing.delete(id);
     answered.add(id);
-    onAnswer(call.payload, { post: ctx.post, navigate, notify, endCall: (callId) => RNCallKeep.endCall(callId) });
+    onAnswer(call.payload, { post: ctx.post, navigate, notify, meId: ctx.meId, endCall: (callId) => RNCallKeep.endCall(callId) });
   }
 
   function end({ callUUID }: { callUUID: string }) {

@@ -25,8 +25,15 @@ test('answering a page acknowledges it as a call, hangs up, opens the page and s
   expect(notify).toHaveBeenCalledWith({ title: 'Acknowledged · Checkout failing', body: 'Paging stopped. Tap to open.', path: '/page/14' });
 });
 
+test('acknowledged already by you (a retry that had got through) reads as done', async () => {
+  const post = jest.fn().mockResolvedValue({ changed: false, incident: { ackedBy: { id: 1, name: 'Ben Carter' } } });
+  const notify = jest.fn();
+  await onAnswer(page, { post, endCall: jest.fn(), navigate: jest.fn(), notify, meId: 1 });
+  expect(notify).toHaveBeenCalledWith({ title: 'Acknowledged · Checkout failing', body: 'Paging stopped. Tap to open.', path: '/page/14' });
+});
+
 test('someone else acknowledged first: the notice says who has it', async () => {
-  const post = jest.fn().mockResolvedValue({ changed: false, incident: { ackedBy: { name: 'Ana Gomez' } } });
+  const post = jest.fn().mockResolvedValue({ changed: false, incident: { ackedBy: { id: 2, name: 'Ana Gomez' } } });
   const notify = jest.fn();
   await onAnswer(page, { post, endCall: jest.fn(), navigate: jest.fn(), notify });
   expect(notify).toHaveBeenCalledWith({ title: 'Already acknowledged · Checkout failing', body: 'Ana Gomez has it. Tap to open.', path: '/page/14' });

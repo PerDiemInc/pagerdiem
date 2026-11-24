@@ -52,7 +52,7 @@ test('Android steps', async () => {
 test('Focus is done once you come back and confirm', async () => {
   const openSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined);
   await show(phone({ notifications: true }));
-  await fireEvent.press(screen.getByRole('button', { name: 'Open Focus settings' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Open Settings' }));
   expect(openSettings).toHaveBeenCalled();
   await fireEvent.press(await screen.findByRole('button', { name: 'I’ve added PagerDiem' }));
   expect(JSON.parse(posted('/api/app/device')[0][1].body)).toEqual({ checks: { focus: true } });

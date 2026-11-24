@@ -100,7 +100,8 @@ export function useIncidentActions() {
   async function acknowledge(id: number) {
     const result = await act<{ changed: boolean; incident: IncidentSummary }>(`/api/app/incidents/${id}/ack`, { via: 'app' });
     // Someone else got there first: not an error, the incident is handled.
-    if (result) toast.show({ text: result.changed ? 'Acknowledged. Paging stopped.' : `Already acknowledged by ${result.incident.ackedBy?.name ?? 'someone else'}` });
+    const mine = result?.changed || result?.incident.ackedBy?.id === me.data?.user.id; // a retry of your own
+    if (result) toast.show({ text: mine ? 'Acknowledged. Paging stopped.' : `Already acknowledged by ${result.incident.ackedBy?.name ?? 'someone else'}` });
     return Boolean(result);
   }
 

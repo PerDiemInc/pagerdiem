@@ -9,7 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HoldButton } from '@/components/hold-button';
 import { AppText, Button, Field, Loading, SheetHeader } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/theme';
-import { useAction, useHome, useIncidents, useMe } from '@/hooks/use-api';
+import { useAction, useHome, useIncident, useIncidents, useMe } from '@/hooks/use-api';
 import { useNow } from '@/hooks/use-now';
 import { useTheme } from '@/hooks/use-theme';
 import type { IncidentSummary, Person } from '@/lib/api';
@@ -132,10 +132,14 @@ function ModeOption({ Icon, title, sub, checked, onPress }: { Icon: LucideIcon; 
 function SentState({ sent, channel, onOpen, onDone }: { sent: Sent; channel: string; onOpen: () => void; onDone: () => void }) {
   const c = useTheme();
   const now = useNow(1000);
+  // Refreshed every 5 s while it's open, so the moment someone picks it up shows here.
+  const live = useIncident(sent.incident.id).data?.incident;
+  const takenBy = live && live.status !== 'open' ? live.ackedBy : null;
   const calling = sent.paged.length > 0;
   const Icon = calling ? PhoneOutgoing : Megaphone;
   let text = 'We’ll tell you here and in Slack the moment someone acknowledges.';
   if (!calling) text = sent.mode === 'post' ? 'Nobody was called. You’ll see it here when someone picks it up.' : `Nobody’s on call, so we posted @here in ${channel}.`;
+  if (takenBy) text = `${takenBy.name} acknowledged. Paging stopped.`;
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.five, gap: Spacing.three }}>
       <View style={[styles.sentIcon, { backgroundColor: calling ? c.tintSoft : c.fill }]}>
@@ -145,7 +149,7 @@ function SentState({ sent, channel, onOpen, onDone }: { sent: Sent; channel: str
         {calling ? `Calling ${joinWords(sent.paged.map((p) => p.name))}` : `Posted in ${channel}`}
       </AppText>
       <AppText variant="sub" tone="secondary" style={{ textAlign: 'center' }}>{text}</AppText>
-      {calling ? <AppText variant="mono" tone="tint">{`Ringing · ${formatTimer(now.getTime() - sent.at)}`}</AppText> : null}
+      {calling && !takenBy ? <AppText variant="mono" tone="tint">{`Ringing · ${formatTimer(now.getTime() - sent.at)}`}</AppText> : null}
       <View style={{ alignSelf: 'stretch', gap: Spacing.two, marginTop: Spacing.four }}>
         <Button label={`Open incident #${sent.incident.id}`} onPress={onOpen} />
         <Button label="Done" variant="ghost" onPress={onDone} />

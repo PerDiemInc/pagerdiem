@@ -52,6 +52,13 @@ test('someone else got there first: not an error, just who has it', async () => 
   expect(await screen.findByText('Already acknowledged by Ana Gomez')).toBeTruthy();
 });
 
+test('acknowledging something you had already acknowledged just says it’s done', async () => {
+  await show([paging], { 'POST /api/app/incidents/14/ack': { changed: false, incident: { ...paging, status: 'acknowledged', ackedBy: ben } } });
+  await fireEvent(await screen.findByLabelText('Checkout failing for all stores'), 'longPress');
+  await pressAlertButton('Acknowledge');
+  expect(await screen.findByText('Acknowledged. Paging stopped.')).toBeTruthy();
+});
+
 test('resolve asks first', async () => {
   await show([taken], { 'POST /api/app/incidents/13/resolve': { changed: true, incident: { ...taken, status: 'resolved' } } });
   await fireEvent(await screen.findByLabelText('API 5xx above 2% on /orders'), 'longPress');

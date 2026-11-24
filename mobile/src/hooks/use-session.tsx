@@ -34,7 +34,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(async ({ server, token, me }: SignedIn) => {
     // Signed in somewhere already (another server, or another person): that sign-in stops ringing.
     if (state.status === 'signedIn') await state.api.post('/api/app/signout').catch(() => null);
-    const session: Session = { server, token, publicUrl: me?.team?.publicUrl, timezone: me?.team?.timezone };
+    const session: Session = { server, token, publicUrl: me?.team?.publicUrl, timezone: me?.team?.timezone, userId: me?.user?.id };
     await saveSession(session);
     setState(signedIn(session));
   }, [signedIn, state]);

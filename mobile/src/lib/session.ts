@@ -5,7 +5,7 @@
 // call can be handled before the app has reached the server.
 import * as SecureStore from 'expo-secure-store';
 
-export type Session = { server: string; token: string; publicUrl?: string; timezone?: string };
+export type Session = { server: string; token: string; publicUrl?: string; timezone?: string; userId?: number };
 
 const KEY = 'pd.session';
 const options = { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY };

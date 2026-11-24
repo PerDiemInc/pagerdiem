@@ -107,10 +107,12 @@ function Calls() {
         context: () => {
           const s = current.current;
           if (s.status !== 'signedIn') return null;
-          const team = queryClient.getQueryData<Me>(['me'])?.team;
+          const cached = queryClient.getQueryData<Me>(['me']);
+          const team = cached?.team;
           return {
             post: s.api.post, get: s.api.get, server: s.session.server, publicUrl: s.session.publicUrl ?? team?.publicUrl,
             timezone: s.session.timezone ?? team?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+            meId: s.session.userId ?? cached?.user.id,
           };
         },
       });

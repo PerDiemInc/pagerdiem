@@ -23,7 +23,8 @@ test('a sign-in link asks before connecting, then signs the phone in', async () 
   expect(await screen.findByText('Connect to localhost:3000?')).toBeTruthy();
   await fireEvent.press(screen.getByRole('button', { name: 'Connect' }));
   await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/setup'));
-  expect(SecureStore.setItemAsync).toHaveBeenCalledWith('pd.session', JSON.stringify({ server: 'http://localhost:3000', token: 'tok' }), expect.anything());
+  // Who signed in is kept with the token, so a call can be handled before the app reaches the server.
+  expect(SecureStore.setItemAsync).toHaveBeenCalledWith('pd.session', JSON.stringify({ server: 'http://localhost:3000', token: 'tok', userId: 1 }), expect.anything());
 });
 
 test('a sign-up link from outside the app is refused: sign-ups finish in the app’s own Google sheet', async () => {

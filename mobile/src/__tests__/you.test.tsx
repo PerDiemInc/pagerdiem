@@ -94,3 +94,11 @@ test('the activity log says where each change was made', async () => {
   await fireEvent.press(screen.getByRole('tab', { name: 'Rotation' }));
   expect(screen.queryByText('Ben Carter answered a test call')).toBeNull();
 });
+
+test('iPhone calls follow the ringer, so there are no Vibrate or full-volume switches', async () => {
+  await serve('engineer');
+  await renderScreen(<Gate />);
+  expect(await screen.findByText('Ringtone')).toBeTruthy();
+  expect(screen.queryByText('Vibrate')).toBeNull();
+  expect(screen.queryByText('Ring at full volume')).toBeNull();
+});
