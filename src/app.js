@@ -21,7 +21,8 @@ import { normalizeCoverage, readSetting } from './settings.js';
 import { isRole, isAdmin, isResponder } from './roles.js';
 import { makeActions, EMAIL, REMOVED } from './actions.js';
 import { makeDevices, CHALLENGE } from './devices.js';
-import { registerAppApi, appSignInRedirect } from './app-api.js';
+import { appSignInRedirect } from './app-api.js';
+import { registerAppApi } from './routes/app/index.js';
 
 const safeBack = (value, fallback) => (/^\/(?![/\\])[^\r\n\\]*$/.test(String(value || '')) ? value : fallback);
 
