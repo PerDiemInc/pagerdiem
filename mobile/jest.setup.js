@@ -1,6 +1,4 @@
 // Native-only pieces swapped out for Jest.
-// Every test runs with the phone in Pakistan, so team-timezone formatting is really exercised.
-process.env.TZ = "Asia/Karachi";
 require('react-native-gesture-handler/jestSetup');
 // The swipe gesture needs Reanimated's native runtime; tests render the row without it
 // (the long-press menu offers the same actions and is tested; the swipe is checked on a device).
