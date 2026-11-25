@@ -99,7 +99,23 @@ The sign-in page now shows **Sign in with Google**. Sign in first: the first per
 5. **Save, rebuild, and deploy.**
 6. In Slack, run `/invite @PagerDiem` in that channel. Without this, channel posts fail with `not_in_channel`.
 
-## 6. Check it
+## 6. Phone calls (optional)
+
+The PagerDiem phone app rings like a call when someone is paged. Calls need the push keys of
+whoever publishes the app. Without them, calls are only logged as *dry-run* under Settings → Recent messages.
+
+| Variable | Where it comes from |
+|---|---|
+| `APNS_KEY_ID` | Apple Developer → Certificates, Identifiers & Profiles → Keys: an APNs key. One key works for every app on the team. |
+| `APNS_TEAM_ID` | The team ID shown at the top right of the Apple Developer site. |
+| `APNS_PRIVATE_KEY` | The contents of that key's `.p8` file. Paste it with real line breaks or with `\n`. Apple only lets you download it once. |
+| `APNS_ENV` | `production` (default) for TestFlight and App Store builds; `development` for Xcode debug builds. |
+| `APNS_BUNDLE_ID` | Only if your build of the app uses another bundle id (default `com.tryperdiem.pagerdiem`). |
+| `FCM_SERVICE_ACCOUNT` | Firebase → Project settings → Service accounts → Generate new private key: paste the whole JSON. |
+
+Render logs `Phone calls: iPhone on, Android on` at startup when the keys are right.
+
+## 7. Check it
 
 1. **Settings** should show **Slack: connected**.
 2. **Team → Send me a test message**: you should get a Slack DM, and the note should read *Slack sent*.
@@ -118,3 +134,5 @@ The sign-in page now shows **Sign in with Google**. Sign in first: the first per
 | *"Only … Google Workspace accounts can use PagerDiem"* | The account isn't on `ALLOWED_EMAIL_DOMAINS`, or it's a personal Gmail. |
 | Settings still says *dry-run* after adding Slack keys | The variables weren't saved: Render only applies them after **Save, rebuild, and deploy**. |
 | Messages sent before Slack was connected | **Settings → Re-send this weekend's on-call messages** (admins). |
+| Startup log says *Phone calls on iPhone are off* | Only some of `APNS_KEY_ID`, `APNS_TEAM_ID` and `APNS_PRIVATE_KEY` are set. Set all three. |
+| A phone never rings but Recent messages says *sent* | Run **Wake-up checks** in the app. On iPhone a call follows the ringer switch, so keep the ringer on while on call. |

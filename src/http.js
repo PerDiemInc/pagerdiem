@@ -3,7 +3,7 @@
 const MAX_BODY = 256 * 1024;
 
 export class HttpError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, field) { super(message); this.status = status; if (field) this.field = field; }
 }
 
 export function readBody(req) {
@@ -46,6 +46,7 @@ export function makeResponder(res) {
     cookie: (c) => cookies.push(c),
     html: (body, status = 200) => send(status, body, 'text/html; charset=utf-8'),
     json: (obj, status = 200) => send(status, JSON.stringify(obj), 'application/json; charset=utf-8'),
+    empty: () => send(204, '', 'text/plain; charset=utf-8'),
     text: (body, status = 200) => send(status, body, 'text/plain; charset=utf-8'),
     xml: (body, status = 200) => send(status, body, 'text/xml; charset=utf-8'),
     calendar: (body) => send(200, body, 'text/calendar; charset=utf-8'),

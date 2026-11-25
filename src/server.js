@@ -1,4 +1,4 @@
-import { config, slackEnabled } from './config.js';
+import { config, slackEnabled, pushEnabled, pushWarnings } from './config.js';
 import { openDb } from './db.js';
 import { createApp } from './app.js';
 
@@ -26,6 +26,9 @@ app.server.listen(config.port, () => {
   console.log(`PagerDiem running at ${config.publicUrl} (port ${config.port})`);
   console.log(`  Shifts: ${JSON.stringify(config.shiftStart)} -> ${JSON.stringify(config.shiftEnd)} in ${config.timezone}`);
   console.log(`  Slack: ${slackEnabled() ? 'connected' : 'dry-run'}`);
+  const push = pushEnabled();
+  console.log(`  Phone calls: iPhone ${push.ios ? 'on' : 'dry-run'}, Android ${push.android ? 'on' : 'dry-run'}`);
+  for (const warning of pushWarnings(process.env)) console.warn(`  WARNING: ${warning}`);
   if (slackEnabled() && !config.slack.signingSecret) console.warn('  WARNING: SLACK_BOT_TOKEN is set but SLACK_SIGNING_SECRET is not, so every Slack command and button will be rejected.');
 });
 

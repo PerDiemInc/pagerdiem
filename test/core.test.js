@@ -22,6 +22,11 @@ const { makeRotation } = await import('../src/rotation.js');
 const { makeNotifier } = await import('../src/notify/index.js');
 const { makeIncidents } = await import('../src/incidents.js');
 const { makeScheduler } = await import('../src/scheduler.js');
+const { makeActions, record } = await import('../src/actions.js');
+const { qrSvg } = await import('../src/views.js');
+const { appSignInRedirect, buildHome, escalationPlan, activityFeed } = await import('../src/app-api.js');
+const { readPayload } = await import('../src/auth.js');
+const { makeDevices, pairingCode, redeemPairingCode, challengeFor } = await import('../src/devices.js');
 
 const shifts = makeShifts(config);
 const at = (iso) => new Date(iso);
@@ -761,4 +766,464 @@ test('the most urgent incidents come first: open, then acknowledged, then resolv
   await incidents.acknowledge(second.id, ana);
   await incidents.resolve(third.id, ana);
   assert.deepEqual((await incidents.list()).map((i) => i.id), [fourth.id, first.id, second.id, third.id]);
+});
+
+async function actionsSetup() {
+  const ctx = await setup();
+  const [ana, ben, cal, iris] = await ctx.addUsers('Ana', 'Ben', 'Cal', 'Iris');
+  await ctx.db.run("UPDATE users SET role = 'admin', is_admin = 1 WHERE id = ?", [iris.id]); // admins aren't auto-assigned
+  config.slack.channel = 'CONCALL';
+  const incidents = makeIncidents({ db: ctx.db, rotation: ctx.rotation, notify: ctx.notify });
+  const scheduler = makeScheduler({ db: ctx.db, shifts, rotation: ctx.rotation, notify: ctx.notify, incidents });
+  const actions = makeActions({ db: ctx.db, shifts, rotation: ctx.rotation, notify: ctx.notify, scheduler });
+  return { ...ctx, actions, ana, ben, cal, iris: await ctx.rotation.userById(iris.id) };
+}
+
+test('actions: leaving a weekend returns the message the web flashes and posts once', async () => {
+  const { actions, sent, ana } = await actionsSetup(); // 2026-11-27 is Cal + Ana
+  sent.length = 0;
+  const r = await actions.leaveWeekend(ana, '2026-11-27', 'app', at('2026-11-24T12:00:00Z'));
+  assert.equal(r.changed, true);
+  assert.match(r.message, /^You're off /);
+  assert.equal(sent.filter((m) => m.to === 'CONCALL').length, 1);
+  const again = await actions.leaveWeekend(ana, '2026-11-27', 'app', at('2026-11-24T12:00:00Z'));
+  assert.equal(again.changed, false);
+  assert.equal(sent.filter((m) => m.to === 'CONCALL').length, 1, 'no second post');
+});
+
+test('actions: the last admin cannot be removed or demoted', async () => {
+  const { actions, iris } = await actionsSetup();
+  await assert.rejects(actions.setActive(iris, iris.id, false, 'app'), { status: 409, message: /at least one admin/ });
+  await assert.rejects(actions.setRole(iris, iris.id, 'engineer', 'app'), { status: 409 });
+});
+
+test('actions: non-admins get 403 from admin actions', async () => {
+  const { actions, ben, cal } = await actionsSetup();
+  await assert.rejects(actions.saveCoverage(ben, { days: [5, 6, 0], start: '18:00', end: '09:00' }, 'app'), { status: 403 });
+  await assert.rejects(actions.setRole(ben, cal.id, 'admin', 'app'), { status: 403, message: 'Only admins can do that' });
+  await assert.rejects(actions.resendWeekendStart(ben, 'app'), { status: 403 });
+});
+
+test('actions: a swap returns an undo that expires in 10 seconds, and undo restores it', async () => {
+  const { actions, rotation, cal, ana } = await actionsSetup();
+  const t0 = at('2026-11-19T12:00:00Z');
+  const r = await actions.swapWeekend(cal, '2026-11-20', ana.id, 'app', t0); // 11-20 is Ana + Ben
+  assert.match(r.message, /^You took Ana's spot for /);
+  assert.equal(r.undo.ids.length, 1);
+  assert.equal(r.undo.until, new Date(t0.getTime() + 10_000).toISOString());
+  const u = await actions.undoSwap(cal, r.undo.ids, 'app', new Date(t0.getTime() + 5_000));
+  assert.equal(u.message, 'Swap undone. Nothing changed and nobody was notified.');
+  assert.deepEqual((await rotation.forShift(shifts.forKey('2026-11-20'))).people.map((p) => p.name), ['Ana', 'Ben']);
+  await assert.rejects(actions.swapWeekend(cal, 'not-a-date', ana.id, 'app', t0), { status: 400 });
+});
+
+test('qrSvg encodes the connect link as a dark-on-light square', () => {
+  const svg = qrSvg('pagerdiem://connect?server=https%3A%2F%2Fx&code=abc');
+  assert.match(svg, /^<svg[^>]+viewBox="0 0 (\d+) \1"/);
+  assert.match(svg, /aria-label="Phone app sign-in code"/);
+  assert.match(svg, /<rect [^>]*fill="#fff"/);
+  assert.notEqual(qrSvg('a'), qrSvg('b'));
+});
+
+test('appSignInRedirect: existing user gets a code, new person a pending signup, failures an error', () => {
+  const params = (link) => new URL(link).searchParams;
+  const existing = appSignInRedirect({ publicUrl: 'https://pd.example.com', user: { id: 7 } });
+  assert.match(existing, /^pagerdiem:\/\/connect\?server=https%3A%2F%2Fpd\.example\.com&code=/);
+  assert.equal(readPayload(params(existing).get('code')).uid, 7);
+  const pending = appSignInRedirect({ publicUrl: 'https://pd.example.com', identity: { email: 'new@example.com', name: 'New' } });
+  assert.match(pending, /&pending=/);
+  assert.equal(readPayload(params(pending).get('pending')).email, 'new@example.com');
+  assert.equal(appSignInRedirect({ publicUrl: 'https://pd.example.com', error: 'Nope' }), 'pagerdiem://connect?error=Nope');
+});
+
+/** setup() plus a notifier that records phone calls, and a phone for each named person. */
+async function callsSetup(phones = {}, pushReply = () => undefined) {
+  const ctx = await setup();
+  const users = await ctx.addUsers('Ana', 'Ben', 'Cal');
+  config.slack.channel = 'CONCALL';
+  const calls = [];
+  let seq = 0; // shared order of every Slack message and phone call
+  const notify = makeNotifier(ctx.db, {
+    slack: async (to, text) => { ctx.sent.push({ ch: 'slack', to, text, seq: ++seq }); },
+    push: async (device, payload) => { calls.push({ device, payload, seq: ++seq }); return pushReply(device, payload); },
+  });
+  const devices = makeDevices(ctx.db);
+  for (const [name, platform] of Object.entries(phones)) {
+    const user = users.find((u) => u.name === name);
+    const { device } = await devices.create(user.id, { platform, name: `${name}'s phone` });
+    await devices.update(device.id, { pushToken: `token-${name}` });
+  }
+  const incidents = makeIncidents({ db: ctx.db, rotation: ctx.rotation, notify });
+  return { ...ctx, users, calls, notify, devices, incidents };
+}
+const after = (t0, min) => new Date(t0.getTime() + min * 60_000);
+
+test('phone calls: a page calls every on-call phone, again at 2 min, then with each re-page', async () => {
+  const { db, sent, calls, incidents } = await callsSetup({ Ana: 'ios' });
+  const t0 = at('2026-11-21T15:00:00Z'); // Saturday: Ana + Ben on call
+  const inc = await incidents.create({ title: 'Checkout down' }, t0);
+  assert.equal(calls.length, 1, "Ana's phone rings; Ben has no app");
+  const first = calls[0].payload;
+  assert.equal(calls[0].device.push_token, 'token-Ana');
+  assert.equal(first.type, 'page');
+  assert.equal(first.attempt, 1);
+  assert.equal(first.incidentId, String(inc.id));
+  assert.equal(first.title, 'Checkout down');
+  assert.match(first.callId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.equal(first.nextCallAt, after(t0, 2).toISOString());
+
+  sent.length = 0;
+  await incidents.tick(after(t0, 2));
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].payload.attempt, 2);
+  assert.equal(calls[1].payload.nextCallAt, after(t0, 5).toISOString(), 'the next call is the 5-minute re-page');
+  assert.ok(!sent.some((m) => m.text?.includes('Reminder')), 'no Slack DM with the second call');
+  assert.ok((await incidents.events(inc.id)).some((e) => e.message === 'Called again so it rings through Do Not Disturb'));
+
+  await incidents.tick(after(t0, 3));
+  assert.equal(calls.length, 2, 'only one second call');
+  await incidents.tick(after(t0, 5));
+  assert.equal(calls.length, 3, 'the 5-minute re-page calls too');
+  assert.equal(calls[2].payload.attempt, 3);
+
+  const rows = await db.all("SELECT * FROM notifications WHERE channel = 'push' ORDER BY id");
+  assert.equal(rows.length, 3);
+  assert.ok(rows.every((r) => r.status === 'sent' && r.incident_id === inc.id));
+});
+
+test('phone calls: nobody has the app, so paging is exactly as before', async () => {
+  const { db, incidents } = await callsSetup();
+  const t0 = at('2026-11-21T15:00:00Z');
+  const inc = await incidents.create({ title: 'Checkout down' }, t0);
+  await incidents.tick(after(t0, 2));
+  assert.equal((await db.all("SELECT * FROM notifications WHERE channel = 'push'")).length, 0);
+  assert.ok(!(await incidents.events(inc.id)).some((e) => /Called again/.test(e.message)));
+});
+
+test('phone calls: a phone that is gone is cleared and skipped next time', async () => {
+  const { db, calls, incidents } = await callsSetup({ Ana: 'ios' }, () => ({ ok: false, gone: true, reason: 'Unregistered' }));
+  const t0 = at('2026-11-21T15:00:00Z');
+  await incidents.create({ title: 'Checkout down' }, t0);
+  assert.equal(calls.length, 1);
+  assert.equal((await db.get("SELECT push_token FROM devices WHERE name = 'Ana''s phone'")).push_token, null);
+  const row = await db.get("SELECT * FROM notifications WHERE channel = 'push'");
+  assert.equal(row.status, 'failed');
+  assert.equal(row.error, 'Phone is no longer registered');
+  await incidents.tick(after(t0, 5));
+  assert.equal(calls.length, 1, 'never called again');
+});
+
+test('phone calls: acknowledging stops Android phones ringing', async () => {
+  const { calls, incidents, users } = await callsSetup({ Ben: 'android' });
+  const inc = await incidents.create({ title: 'Checkout down' }, at('2026-11-21T15:00:00Z'));
+  calls.length = 0;
+  await incidents.acknowledge(inc.id, users[0], 'app');
+  assert.deepEqual(calls.map((c) => [c.device.push_token, c.payload.type, c.payload.incidentId]), [['token-Ben', 'cancel', String(inc.id)]]);
+  await incidents.acknowledge(inc.id, users[1], 'app');
+  assert.equal(calls.length, 1, 'no cancel when nothing changed');
+});
+
+test('phone calls: quiet incidents never call', async () => {
+  const { calls, incidents } = await callsSetup({ Ana: 'ios' });
+  const t0 = at('2026-11-21T15:00:00Z');
+  await incidents.create({ title: 'FYI', quiet: true }, t0);
+  await incidents.tick(after(t0, 2));
+  assert.equal(calls.length, 0);
+});
+
+test('post-only incidents post once, call nobody and never escalate', async () => {
+  const { sent, calls, incidents, users } = await callsSetup({ Ana: 'ios' });
+  const t0 = at('2026-11-21T15:00:00Z');
+  const inc = await incidents.create({ title: 'Menu sync is slow', quiet: true, createdBy: users[2].id }, t0);
+  assert.equal(inc.quiet, 1);
+  assert.deepEqual(inc.paged, []);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, 'CONCALL');
+  assert.match(sent[0].text, /Nobody was called/);
+  for (const min of [2, 5, 15, 30]) await incidents.tick(after(t0, min));
+  assert.equal(sent.length, 1, 'no reminders, no backup, no @channel');
+  assert.equal(calls.length, 0);
+  assert.equal((await incidents.get(inc.id)).escalation_level, 0);
+});
+
+test('whoever pages is skipped when someone else is on call', async () => {
+  const { sent, incidents, users } = await callsSetup();
+  const [ana] = users; // Saturday: Ana + Ben on call
+  const t0 = at('2026-11-21T15:00:00Z');
+  const inc = await incidents.create({ title: 'Checkout down', createdBy: ana.id }, t0);
+  assert.deepEqual(inc.paged.map((p) => p.name), ['Ben']);
+  assert.ok(sent.some((m) => m.to === 'UBEN000000'));
+  assert.ok(!sent.some((m) => m.to === 'UANA000000'), 'Ana paged it, so Ana is not paged');
+  sent.length = 0;
+  await incidents.tick(after(t0, 5));
+  assert.ok(sent.some((m) => m.to === 'UBEN000000' && /Reminder/.test(m.text)));
+  assert.ok(!sent.some((m) => m.to === 'UANA000000'), 'nor reminded');
+});
+
+test('notes are stored, posted once, and refused on resolved incidents', async () => {
+  const { sent, incidents, users } = await callsSetup();
+  const inc = await incidents.create({ title: 'Checkout down' }, at('2026-11-21T15:00:00Z'));
+  sent.length = 0;
+  const note = await incidents.addNote(inc.id, users[0], '  Square status page shows an outage.  ', 'app');
+  assert.equal(note.text, 'Square status page shows an outage.');
+  assert.equal(note.user.name, 'Ana');
+  assert.deepEqual((await incidents.notes(inc.id)).map((n) => [n.text, n.user_name]), [['Square status page shows an outage.', 'Ana']]);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /^:memo: Note on #\d+ from /);
+  await assert.rejects(incidents.addNote(inc.id, users[0], '   ', 'app'), { status: 400 });
+  await incidents.resolve(inc.id, users[0], 'app');
+  await assert.rejects(incidents.addNote(inc.id, users[0], 'late', 'app'), { status: 409, message: 'This incident is resolved' });
+});
+
+test('call everyone again pages the on-call people now', async () => {
+  const { db, sent, incidents, users } = await callsSetup();
+  const t0 = at('2026-11-21T15:00:00Z');
+  const inc = await incidents.create({ title: 'Checkout down' }, t0);
+  sent.length = 0;
+  const r = await incidents.callAgain(inc.id, users[2], after(t0, 3)); // Cal asks
+  assert.deepEqual(r.paged.map((p) => p.name), ['Ana', 'Ben']);
+  assert.ok(sent.some((m) => m.to === 'UANA000000') && sent.some((m) => m.to === 'UBEN000000'));
+  assert.equal((await incidents.get(inc.id)).last_paged_at, after(t0, 3).toISOString(), 'the 5-minute re-page counts from now');
+  assert.ok((await incidents.events(inc.id)).some((e) => e.message === 'Cal asked to call everyone again'));
+  await incidents.acknowledge(inc.id, users[0], 'app');
+  await assert.rejects(incidents.callAgain(inc.id, users[2]), { status: 409 });
+  assert.ok(db);
+});
+
+test('call the backup now pages the backup once', async () => {
+  const { sent, incidents, users } = await callsSetup();
+  const t0 = at('2026-11-21T15:00:00Z'); // Cal is the backup
+  const inc = await incidents.create({ title: 'Checkout down' }, t0);
+  sent.length = 0;
+  const r = await incidents.callBackupNow(inc.id, users[0], after(t0, 1));
+  assert.deepEqual(r.paged.map((p) => p.name), ['Cal']);
+  assert.ok(sent.some((m) => m.to === 'UCAL000000'));
+  assert.equal((await incidents.get(inc.id)).escalation_level, 1);
+  await assert.rejects(incidents.callBackupNow(inc.id, users[0], after(t0, 2)), { status: 409, message: 'The backup has already been called' });
+});
+
+test('recentTitles gives the three newest distinct titles', async () => {
+  const { incidents } = await callsSetup();
+  const t0 = at('2026-11-25T15:00:00Z'); // Wednesday: nobody is paged
+  for (const [i, title] of ['Printer jam', 'Checkout down', 'checkout down', 'Menu sync', 'App crash'].entries()) {
+    await incidents.create({ title }, after(t0, i));
+  }
+  assert.deepEqual(await incidents.recentTitles(), ['App crash', 'Menu sync', 'checkout down']);
+});
+
+test('phone home screen: who is on call on a Saturday, and what is next on a Thursday', async () => {
+  const { db, rotation, incidents, users } = await callsSetup();
+  const [ana] = users;
+  const sat = await buildHome({ db, shifts, rotation, incidents, user: ana, now: at('2026-11-21T15:00:00Z') });
+  assert.deepEqual(sat.onCall.people.map((p) => p.name), ['Ana', 'Ben']);
+  assert.equal(sat.onCall.backup.name, 'Cal');
+  assert.equal(sat.onCall.start, '2026-11-20T23:00:00.000Z', 'the shift start, for the time-left ring');
+  assert.equal(sat.onCall.until, '2026-11-23T14:00:00.000Z');
+  assert.equal(sat.comingUp[0].key, '2026-11-27', 'coming up starts after the running weekend');
+  const thu = await buildHome({ db, shifts, rotation, incidents, user: ana, now: at('2026-11-19T15:00:00Z') });
+  assert.equal(thu.onCall, null);
+  assert.equal(thu.next.key, '2026-11-20');
+  assert.equal(thu.next.mine, true);
+  assert.deepEqual(thu.next.people.map((p) => [p.name, p.initials]), [['Ana', 'A'], ['Ben', 'B']]);
+  const inc = await incidents.create({ title: 'Checkout down' }, at('2026-11-21T15:00:00Z'));
+  const withIncident = await buildHome({ db, shifts, rotation, incidents, user: ana, now: at('2026-11-21T15:01:00Z') });
+  assert.deepEqual(withIncident.needsYou.map((i) => [i.id, i.status]), [[inc.id, 'open']]);
+});
+
+test('escalation plan: what has happened, what is next, and what was skipped', async () => {
+  const { rotation, incidents, users } = await callsSetup();
+  const t0 = at('2026-11-21T15:00:00Z');
+  const inc = await incidents.create({ title: 'Checkout down' }, t0);
+  const who = await incidents.responsibleFor(inc);
+  const plan = (row, min) => escalationPlan(row, after(t0, min), who);
+  const states = (steps) => steps.map((s) => s.state);
+  const steps = plan(inc, 6);
+  assert.deepEqual(steps.map((s) => s.label), ['Call Ana and Ben', 'Slack DMs and #on-call post', 'Rings through Do Not Disturb',
+    'Keep calling every 5 min', 'Call Cal, the backup', '@channel in #on-call', 'Then keep calling everyone']);
+  assert.deepEqual(states(steps), ['done', 'done', 'done', 'next', 'later', 'later', 'later']);
+  assert.equal(steps[4].at, after(t0, 15).toISOString());
+  assert.deepEqual(states(plan(inc, 1)), ['done', 'done', 'next', 'later', 'later', 'later', 'later']);
+  assert.deepEqual(states(plan({ ...inc, escalation_level: 1 }, 16)), ['done', 'done', 'done', 'done', 'done', 'next', 'later']);
+  const acked = (await incidents.acknowledge(inc.id, users[0], 'app', after(t0, 4))).incident;
+  assert.deepEqual(states(plan(acked, 6)), ['done', 'done', 'done', 'skipped', 'skipped', 'skipped', 'skipped']);
+  assert.ok(rotation);
+});
+
+test('activity: weekend changes, acknowledgements and admin changes, newest first', async () => {
+  const { db, rotation, incidents, users } = await callsSetup();
+  const [ana, , cal] = users;
+  await rotation.leave(shifts.forKey('2026-11-27'), ana, at('2026-11-24T10:00:00Z'));
+  const inc = await incidents.create({ title: 'Checkout down' }, at('2026-11-24T11:00:00Z'));
+  await incidents.acknowledge(inc.id, cal, 'phone call', at('2026-11-24T11:05:00Z'));
+  await record(db, { user: ana, via: 'app', icon: 'test', text: 'Ana answered a test call', now: at('2026-11-24T12:00:00Z') });
+  const items = await activityFeed({ db, rotation, shifts });
+  assert.deepEqual(items.map((i) => [i.icon, i.via]), [['test', 'app'], ['ack', 'app'], ['leave', null]]);
+  assert.equal(items[1].text, `Cal acknowledged #${inc.id} Checkout down`);
+  assert.match(items[2].text, /^Ana left Nov 27/);
+});
+
+test('trade: two people swap weekends, either can undo inside 10 seconds, announced once', async () => {
+  const { actions, rotation, sent, ben, cal } = await actionsSetup(); // 11-20 Ana+Ben, 11-27 Cal+Ana
+  const names = async (key) => (await rotation.forShift(shifts.forKey(key))).people.map((p) => p.name).sort();
+  const t0 = at('2026-11-19T12:00:00Z');
+  const r = await actions.tradeWeekends(ben, '2026-11-20', '2026-11-27', cal.id, 'app', t0);
+  assert.equal(r.message, 'Swapped. You take Nov 27 – Nov 30.');
+  assert.equal(r.undo.ids.length, 2);
+  assert.equal(r.undo.until, new Date(t0.getTime() + 10_000).toISOString());
+  assert.deepEqual(await names('2026-11-20'), ['Ana', 'Cal']);
+  assert.deepEqual(await names('2026-11-27'), ['Ana', 'Ben']);
+
+  const u = await actions.undoSwap(cal, [r.undo.ids[1]], 'app', new Date(t0.getTime() + 5_000)); // the other person undoes it
+  assert.equal(u.message, 'Swap undone. Nothing changed and nobody was notified.');
+  assert.deepEqual(await names('2026-11-20'), ['Ana', 'Ben']);
+  assert.deepEqual(await names('2026-11-27'), ['Ana', 'Cal']);
+
+  await actions.tradeWeekends(ben, '2026-11-20', '2026-11-27', cal.id, 'app', t0);
+  sent.length = 0;
+  await actions.announceSwaps(new Date(t0.getTime() + 13_000));
+  const posts = sent.filter((m) => m.to === 'CONCALL');
+  assert.equal(posts.length, 1, 'one message for the trade, not one per half');
+  assert.match(posts[0].text, /traded weekends/);
+  assert.equal(sent.filter((m) => m.to === 'UCAL000000').length, 1, 'Cal hears about it once');
+
+  await assert.rejects(actions.tradeWeekends(ben, '2026-12-04', '2026-11-27', cal.id, 'app', t0), { status: 409 }, 'Cal is no longer on Nov 27');
+});
+
+test('phone calls: only Android phones that rang for the incident are told to stop', async () => {
+  const { calls, incidents, users } = await callsSetup({ Ben: 'android', Cal: 'android' }); // Cal isn't on call
+  const inc = await incidents.create({ title: 'Checkout down' }, at('2026-11-21T15:00:00Z'));
+  assert.deepEqual(calls.map((c) => c.device.push_token), ['token-Ben']);
+  calls.length = 0;
+  await incidents.acknowledge(inc.id, users[0], 'app');
+  assert.deepEqual(calls.map((c) => [c.device.push_token, c.payload.type]), [['token-Ben', 'cancel']]);
+});
+
+test('phone calls: Slack DMs and the channel post go out before any phone is called', async () => {
+  const { sent, calls, incidents, users } = await callsSetup({ Ana: 'ios', Ben: 'android' });
+  const t0 = at('2026-11-21T15:00:00Z');
+  const inc = await incidents.create({ title: 'Checkout down' }, t0);
+  const lastSlack = () => Math.max(...sent.map((m) => m.seq));
+  const firstCall = () => Math.min(...calls.map((c) => c.seq));
+  assert.equal(calls.length, 2);
+  assert.ok(lastSlack() < firstCall(), 'a slow phone push never holds up Slack');
+  sent.length = 0;
+  calls.length = 0;
+  await incidents.tick(after(t0, 5));
+  assert.ok(lastSlack() < firstCall(), 'same for re-pages');
+  sent.length = 0;
+  calls.length = 0;
+  await incidents.acknowledge(inc.id, users[0], 'app');
+  assert.ok(lastSlack() < firstCall(), '#on-call hears the acknowledgement before phones stop ringing');
+});
+
+test('trade: announced exactly once even when two announcers each claim one half', async () => {
+  const { actions, db, sent, ben, cal } = await actionsSetup();
+  const t0 = at('2026-11-19T12:00:00Z');
+  const { undo } = await actions.tradeWeekends(ben, '2026-11-20', '2026-11-27', cal.id, 'app', t0);
+  const [first] = undo.ids;
+  // An overlapping announcer (the swap timer or the scheduler) already claimed the first half and posts the trade.
+  await db.run('UPDATE swaps SET notified_at = ? WHERE id = ?', [new Date(t0.getTime() + 12_500).toISOString(), first]);
+  sent.length = 0;
+  await actions.announceSwaps(new Date(t0.getTime() + 13_000)); // this run only gets the second half
+  assert.equal(sent.filter((m) => m.to === 'CONCALL').length, 0, 'the run holding the first half posts it, not this one');
+
+  const again = await actions.tradeWeekends(ben, '2026-11-27', '2026-11-20', cal.id, 'app', new Date(t0.getTime() + 20_000));
+  await db.run('UPDATE swaps SET notified_at = ? WHERE id = ?', [new Date(t0.getTime() + 32_500).toISOString(), again.undo.ids[1]]);
+  sent.length = 0;
+  await actions.announceSwaps(new Date(t0.getTime() + 33_000)); // this run holds the first half
+  assert.equal(sent.filter((m) => m.to === 'CONCALL' && /traded weekends/.test(m.text)).length, 1, 'posted even though the other half was claimed elsewhere');
+});
+
+test('app sign-in binding: a code made for a challenge needs the matching verifier, checked before the code is spent', async () => {
+  const { db } = await setup();
+  const verifier = 'x'.repeat(43);
+  const challenge = challengeFor(verifier);
+  const code = pairingCode(7, { challenge });
+  assert.equal(await redeemPairingCode(db, code), null, 'no verifier: another app caught the link');
+  assert.equal(await redeemPairingCode(db, code, 'y'.repeat(43)), null, 'wrong verifier');
+  assert.equal(await redeemPairingCode(db, code, verifier), 7, 'the app that asked can still use it');
+  assert.equal(await redeemPairingCode(db, code, verifier), null, 'still single use');
+  assert.equal(await redeemPairingCode(db, pairingCode(8)), 8, 'a QR code from the Team page needs no verifier');
+
+  const params = (link) => new URL(link).searchParams;
+  const link = appSignInRedirect({ publicUrl: 'https://pd.example.com', user: { id: 9 }, challenge });
+  assert.equal(readPayload(params(link).get('code')).ch, challenge);
+  const pending = appSignInRedirect({ publicUrl: 'https://pd.example.com', identity: { email: 'n@example.com', name: 'N' }, challenge });
+  assert.equal(readPayload(params(pending).get('pending')).ch, challenge);
+});
+
+test('call everyone again waits a minute between calls, so nobody can ring the team over and over', async () => {
+  const { incidents, users } = await callsSetup();
+  const t0 = at('2026-11-21T15:00:00Z');
+  const inc = await incidents.create({ title: 'Checkout down' }, t0);
+  await assert.rejects(incidents.callAgain(inc.id, users[2], after(t0, 0.5)), { status: 429, message: 'Everyone was called less than a minute ago.' });
+  await incidents.callAgain(inc.id, users[2], after(t0, 3));
+  await assert.rejects(incidents.callAgain(inc.id, users[2], after(t0, 3.5)), { status: 429 });
+  await incidents.callAgain(inc.id, users[2], after(t0, 4.1));
+});
+
+test('escalation plan on a weekday and for a post-only incident', async () => {
+  const { incidents } = await callsSetup();
+  const t0 = at('2026-11-25T15:00:00Z'); // Wednesday: nobody is on call
+  const weekday = await incidents.create({ title: 'Checkout down' }, t0);
+  assert.deepEqual(escalationPlan(weekday, after(t0, 5), await incidents.responsibleFor(weekday)).map((s) => [s.label, s.state]),
+    [['@here in #on-call', 'done'], ['Remind #on-call every 30 min', 'next']]);
+  const quiet = await incidents.create({ title: 'FYI', quiet: true }, t0);
+  assert.deepEqual(escalationPlan(quiet, after(t0, 5), null).map((s) => s.label), ['Posted in #on-call, nobody called']);
+});
+
+test('call the backup now with no backup alerts the whole channel instead', async () => {
+  const ctx = await setup();
+  await ctx.addUsers('Ana', 'Ben'); // both on call, nobody left to be the backup
+  config.slack.channel = 'CONCALL';
+  const incidents = makeIncidents({ db: ctx.db, rotation: ctx.rotation, notify: ctx.notify });
+  const t0 = at('2026-11-21T15:00:00Z');
+  const inc = await incidents.create({ title: 'Checkout down' }, t0);
+  ctx.sent.length = 0;
+  const ana = await ctx.rotation.userById(inc.assigned_user_id);
+  assert.deepEqual(await incidents.callBackupNow(inc.id, ana, after(t0, 1)), { paged: [] });
+  assert.ok(ctx.sent.some((m) => m.to === 'CONCALL' && m.text.includes('<!channel>')));
+  assert.equal((await incidents.get(inc.id)).escalation_level, 2);
+});
+
+test('actions: a one-way swap is announced once after the undo window; resend is logged', async () => {
+  const { actions, db, sent, cal, ana, iris } = await actionsSetup();
+  const t0 = at('2026-11-19T12:00:00Z');
+  await actions.swapWeekend(cal, '2026-11-20', ana.id, 'app', t0);
+  sent.length = 0;
+  await actions.announceSwaps(new Date(t0.getTime() + 13_000));
+  assert.equal(sent.filter((m) => m.to === 'CONCALL' && /took .*'s spot/.test(m.text)).length, 1);
+  assert.equal(sent.filter((m) => m.to === 'UANA000000').length, 1, 'Ana hears she is off');
+  await actions.announceSwaps(new Date(t0.getTime() + 20_000));
+  assert.equal(sent.filter((m) => m.to === 'CONCALL').length, 1, 'once');
+
+  const r = await actions.resendWeekendStart(iris, 'app', at('2026-11-21T12:00:00Z'));
+  assert.match(r.message, /^Re-sent "you're on call now" to /);
+  assert.ok((await db.all('SELECT text FROM admin_log')).some((l) => l.text === 'Iris re-sent the weekend message'));
+});
+
+test('phone calls with no push keys are recorded as dry-run, like Slack', async () => {
+  const ctx = await setup();
+  const [ana] = await ctx.addUsers('Ana');
+  const devices = makeDevices(ctx.db);
+  const { device } = await devices.create(ana.id, { platform: 'android', name: 'Pixel' });
+  await devices.update(device.id, { pushToken: 'fcm-1' });
+  const notify = makeNotifier(ctx.db); // no overrides and no FCM_SERVICE_ACCOUNT
+  const [result] = await notify.call(ana, { payload: { type: 'page', title: 'Checkout down' }, incidentId: null });
+  assert.deepEqual(result, { ok: true, dryRun: true });
+  const row = await ctx.db.get("SELECT * FROM notifications WHERE channel = 'push'");
+  assert.equal(row.status, 'dry-run');
+  assert.equal(row.device_id, device.id);
+});
+
+test('a phone that keeps using the app updates last seen at most once an hour', async () => {
+  const ctx = await setup();
+  const [ana] = await ctx.addUsers('Ana');
+  const devices = makeDevices(ctx.db);
+  const t0 = at('2026-11-24T10:00:00Z');
+  const { device, token } = await devices.create(ana.id, { platform: 'ios', name: 'iPhone' }, t0);
+  await devices.authenticate(token, after(t0, 30));
+  assert.equal((await devices.get(device.id)).last_seen_at, t0.toISOString(), 'no write within the hour');
+  await devices.authenticate(token, after(t0, 61));
+  assert.equal((await devices.get(device.id)).last_seen_at, after(t0, 61).toISOString());
 });

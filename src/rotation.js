@@ -208,20 +208,45 @@ export function makeRotation(db, shifts) {
     return db.get('SELECT * FROM swaps WHERE id = ?', [id]);
   }
 
-  /** Undo your own swap within 10 seconds. Returns true if undone. */
+  /**
+   * Trade weekends: you take their spot on their weekend and they take yours on yours. Two swap
+   * rows linked by trade_id, undoable together by either person for 10 seconds.
+   */
+  async function trade(myShift, theirShift, me, otherId, now = new Date()) {
+    const refuse = (message) => Object.assign(new Error(message), { status: 409 });
+    if (myShift.key === theirShift.key) throw refuse('Pick a different weekend to trade with.');
+    if (myShift.end <= now || theirShift.end <= now) throw refuse('That weekend is already over.');
+    const mine = await forShift(myShift);
+    const theirs = await forShift(theirShift);
+    if (!mine.people.some((p) => p.id === me.id)) throw refuse("You're not on call that weekend.");
+    if (!theirs.people.some((p) => p.id === otherId)) throw refuse("That person isn't on call that weekend.");
+    if (theirs.people.some((p) => p.id === me.id)) throw refuse("You're already on call their weekend.");
+    if (mine.people.some((p) => p.id === otherId)) throw refuse("They're already on call your weekend.");
+    const other = await userById(otherId);
+    const a = await swap(theirShift, me, otherId, now);
+    const b = await swap(myShift, other, me.id, now);
+    await db.run('UPDATE swaps SET trade_id = ? WHERE id = ?', [b.id, a.id]);
+    await db.run('UPDATE swaps SET trade_id = ? WHERE id = ?', [a.id, b.id]);
+    return [{ ...a, trade_id: b.id }, { ...b, trade_id: a.id }];
+  }
+
+  /** Undo your own swap (or either half of a trade you're in) within 10 seconds. Returns true if undone. */
   async function undoSwap(id, user, now = new Date()) {
     const s = await db.get('SELECT * FROM swaps WHERE id = ?', [id]);
-    if (!s || s.by_user_id !== user.id) throw Object.assign(new Error('Not your swap.'), { status: 403 });
+    const pair = s?.trade_id ? await db.get('SELECT * FROM swaps WHERE id = ?', [s.trade_id]) : null;
+    if (!s || ![s.by_user_id, pair?.by_user_id].includes(user.id)) throw Object.assign(new Error('Not your swap.'), { status: 403 });
     if (s.undone_at) return false;
     if (now - new Date(s.at) > UNDO_MS + UNDO_GRACE_MS) {
       throw Object.assign(new Error('The 10 seconds to undo have passed.'), { status: 400 });
     }
-    const restore = async (uid, prev) => (prev
-      ? setStatus(s.weekend_key, uid, prev, now)
-      : db.run('DELETE FROM weekend_members WHERE weekend_key = ? AND user_id = ?', [s.weekend_key, uid]));
-    await restore(s.by_user_id, s.prev_by_status);
-    await restore(s.replaced_user_id, s.prev_replaced_status);
-    await db.run('UPDATE swaps SET undone_at = ? WHERE id = ?', [now.toISOString(), id]);
+    for (const row of [s, pair].filter((r) => r && !r.undone_at)) {
+      const restore = async (uid, prev) => (prev
+        ? setStatus(row.weekend_key, uid, prev, now)
+        : db.run('DELETE FROM weekend_members WHERE weekend_key = ? AND user_id = ?', [row.weekend_key, uid]));
+      await restore(row.by_user_id, row.prev_by_status);
+      await restore(row.replaced_user_id, row.prev_replaced_status);
+      await db.run('UPDATE swaps SET undone_at = ? WHERE id = ?', [now.toISOString(), row.id]);
+    }
     return true;
   }
 
@@ -273,6 +298,6 @@ export function makeRotation(db, shifts) {
 
   return {
     activeMembers, rotationMembers, userById, schedule, rotationStartKey, forShift, lock, onCallNow,
-    backupFor, join, leave, swap, undoSwap, claimSwapsToAnnounce, UNDO_MS, log, balance, move, nextRotationOrder,
+    backupFor, join, leave, swap, trade, undoSwap, claimSwapsToAnnounce, UNDO_MS, log, balance, move, nextRotationOrder,
   };
 }
