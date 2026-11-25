@@ -23,7 +23,6 @@ import { makeActions, EMAIL, REMOVED } from './actions.js';
 import { makeDevices, CHALLENGE } from './devices.js';
 import { appSignInRedirect } from './app-api.js';
 import { registerAppApi } from './routes/app/index.js';
-import { ringTestCall, noPushKeys } from './routes/app/device.js';
 
 const safeBack = (value, fallback) => (/^\/(?![/\\])[^\r\n\\]*$/.test(String(value || '')) ? value : fallback);
 
@@ -36,9 +35,6 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   const ping = makePing({ db, rotation, post: pingPost ?? slackPost, fetchImpl: pingFetch });
   const actions = makeActions({ db, shifts, rotation, notify, scheduler });
   const devices = makeDevices(db);
-  // Test calls waiting to be answered: callId -> { deviceId, at }. Kept in memory: a restart
-  // only means asking for another one.
-  const testCalls = new Map();
   const { userCount, userByEmail, userBySlack, createMember } = actions;
   const router = makeRouter();
   const fmt = (d) => formatLocal(d, config.timezone);
@@ -521,18 +517,31 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     return lines.join('\n');
   }
 
-  /** `/page test`: ring your own phones, to check calls reach you without paging anyone. */
-  async function slackTestCall(user) {
-    if (!user) return "Your Slack account isn't linked to anyone in PagerDiem. Add your Slack member ID to your profile on the web app.";
-    const phones = await devices.forUser(user.id);
-    if (!phones.length) return 'No phone of yours is signed in to the PagerDiem app. Scan the code on the web Team page with the app.';
-    const results = await Promise.all(phones.map((device) => ringTestCall({ notify, testCalls }, device, user)));
-    return phones.map((device, i) => {
-      const name = slackText(device.name);
-      if (results[i].dryRun) return `:no_bell: ${name}: ${noPushKeys(device)}`;
-      if (!results[i].ok) return `:x: Couldn't reach ${name}: ${results[i].error?.message || 'push failed'}`;
-      return `:telephone_receiver: Calling ${name} now. Answer it to check calls reach you.`;
-    }).join('\n');
+  /** `/page test call me|everyone <what broke>`: a test incident that calls you, or every engineer and admin, once. */
+  async function slackTestPage(what, asker) {
+    const reply = (text, responseType = 'ephemeral') => ({ response_type: responseType, text });
+    const match = /^test\s+call\s+(me|everyone)(?:\s+(.*))?$/i.exec(what);
+    if (!match) {
+      return reply('`/page test call me <what broke>` calls only you. `/page test call everyone <what broke>` calls every engineer and admin. ' +
+        'A test page calls once, never escalates and stays out of the channel.');
+    }
+    if (!asker) return reply("Your Slack account isn't linked to anyone in PagerDiem. Add your Slack member ID to your profile on the web app.");
+    const everyone = match[1].toLowerCase() === 'everyone';
+    if (everyone && !isResponder(asker)) return reply('Only engineers and admins can call everyone.');
+    if (!everyone && !(await devices.forUser(asker.id)).length) {
+      return reply('No phone of yours is signed in to the PagerDiem app. Scan the code on the web Team page with the app.');
+    }
+    const people = everyone ? (await rotation.activeMembers()).filter(isResponder) : [asker];
+    const { incident, called } = await incidents.testPage({ title: match[2], by: asker, people });
+    const lines = called.map(({ user, calls }) => {
+      const name = slackText(user.name);
+      if (!calls.length) return `:no_mobile_phones: ${name} has no phone signed in to the app`;
+      if (calls.some((c) => c.ok && !c.dryRun)) return `:telephone_receiver: Calling ${name}`;
+      if (calls.every((c) => c.dryRun)) return `:no_bell: ${name}: phone calls aren't set up on this server (no push keys), so nothing rang`;
+      return `:x: Couldn't reach ${name}: ${calls.find((c) => !c.ok)?.error?.message || 'push failed'}`;
+    });
+    const head = `:test_tube: Test page #${incident.id} *${slackText(incident.title)}* from ${mention(asker)}. It calls once and never escalates.`;
+    return reply([head, ...lines].join('\n'), everyone ? 'in_channel' : 'ephemeral');
   }
 
   router.post('/slack/commands', async (ctx) => {
@@ -541,8 +550,8 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     const title = text.trim();
     if (command === '/page' || (command !== '/oncall' && title.toLowerCase().startsWith('page '))) {
       const what = command === '/page' ? title : title.slice(5).trim();
-      if (!what) return ctx.r.json({ response_type: 'ephemeral', text: 'Usage: `/page <what is broken>`, or `/page test` to ring your own phone.' });
-      if (what.toLowerCase() === 'test') return ctx.r.json({ response_type: 'ephemeral', text: await slackTestCall(await userBySlack(slackUser)) });
+      if (!what) return ctx.r.json({ response_type: 'ephemeral', text: 'Usage: `/page <what is broken>`, or `/page test call me` to try it on your own phone.' });
+      if (/^test(\s|$)/i.test(what)) return ctx.r.json(await slackTestPage(what, await userBySlack(slackUser)));
       const creator = (await userBySlack(slackUser));
       const onCall = (await rotation.onCallNow());
       // Slack needs an answer within 3 seconds, so page in the background.
@@ -630,7 +639,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
 
   router.get('/healthz', async (ctx) => ctx.r.json({ ok: true }));
 
-  registerAppApi({ router, db, shifts, rotation, incidents, notify, actions, devices, testCalls });
+  registerAppApi({ router, db, shifts, rotation, incidents, notify, actions, devices });
 
   // ---------- server ----------
   // Browsers send Sec-Fetch-Site / Origin on form posts. Slack and the API authenticate with a

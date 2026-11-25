@@ -8,5 +8,8 @@ import schedule from './schedule.js';
 import team from './team.js';
 
 export function registerAppApi({ router, ...deps }) {
-  registerRoutes(router, [...auth, ...device, ...home, ...incidents, ...schedule, ...team], deps);
+  // Test calls waiting to be answered: callId -> { deviceId, at }. Kept in memory: a restart
+  // only means pressing "Ring me now" again.
+  const testCalls = new Map();
+  registerRoutes(router, [...auth, ...device, ...home, ...incidents, ...schedule, ...team], { ...deps, testCalls });
 }
