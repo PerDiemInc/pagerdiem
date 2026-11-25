@@ -21,7 +21,7 @@ import { normalizeCoverage, readSetting } from './settings.js';
 import { isRole, isAdmin, isResponder } from './roles.js';
 import { makeActions, EMAIL, REMOVED } from './actions.js';
 import { makeDevices, CHALLENGE } from './devices.js';
-import { appSignInRedirect } from './app-api.js';
+import { appSignInRedirect, escalationPlan } from './app-api.js';
 import { registerAppApi } from './routes/app/index.js';
 
 const safeBack = (value, fallback) => (/^\/(?![/\\])[^\r\n\\]*$/.test(String(value || '')) ? value : fallback);
@@ -245,21 +245,44 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   });
 
   // ---------- dashboard & schedule ----------
+  /** The sidebar's on-call panel: the weekend in progress, or else the next one. */
+  const sidebarOnCall = (running, next) => (running ? { ...running, running: true } : next ? { ...next, running: false } : null);
+
+  /** The signed-in user with the sidebar's on-call panel. Only routes that render a page ask, so feeds, redirects and form posts skip the lookup. */
+  async function pageUser(ctx) {
+    const now = new Date();
+    const running = await rotation.onCallNow(now);
+    return { ...ctx.user, onCall: sidebarOnCall(running, running ? null : (await rotation.schedule(shifts.currentOrNext(now), 1))[0]) };
+  }
+
+  /** Signed-in phones by person id, for "can we reach them?", "Your phone" and the Team page. */
+  async function phonesByPerson() {
+    const phones = new Map();
+    for (const d of await db.all('SELECT id, user_id, platform, name, push_token, tested_at, created_at FROM devices WHERE revoked_at IS NULL ORDER BY id')) {
+      const id = Number(d.user_id);
+      if (!phones.has(id)) phones.set(id, []);
+      phones.get(id).push(d);
+    }
+    return phones;
+  }
+
   router.get('/', async (ctx) => {
     if (!requireUser(ctx)) return;
     if (!isResponder(ctx.user)) return ctx.r.redirect('/calendar');
     const now = new Date();
     const onCall = await rotation.onCallNow(now);
     const schedule = await rotation.schedule(shifts.currentOrNext(now), 12);
+    const phones = await phonesByPerson();
     ctx.r.html(views.dashboardPage({
-      user: ctx.user, now, onCall: onCall?.people.length ? onCall : null, runningShift: onCall?.shift ?? null,
+      user: { ...ctx.user, onCall: sidebarOnCall(onCall, schedule[0]) }, now, onCall: onCall?.people.length ? onCall : null, runningShift: onCall?.shift ?? null,
       nextEntry: onCall ? null : schedule[0],
-      backup: onCall?.people.length ? await rotation.backupFor(onCall.shift) : null,
+      backup: onCall ? await rotation.backupFor(onCall.shift) : null,
       schedule,
       coverage: shifts.coverage(),
       balance: await rotation.balance(schedule),
       recentLog: await rotation.log({ limit: 8 }),
       openIncidents: (await incidents.list()).filter((i) => i.status !== 'resolved'),
+      phones,
       flash: takeFlash(ctx),
     }));
   });
@@ -302,7 +325,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   // Public (to everyone signed in) history of who added or removed themselves.
   router.get('/log', async (ctx) => {
     if (!requireUser(ctx)) return;
-    ctx.r.html(views.logPage({ user: ctx.user, log: await rotation.log({ limit: 1000 }), flash: takeFlash(ctx) }));
+    ctx.r.html(views.logPage({ user: await pageUser(ctx), log: await rotation.log({ limit: 1000 }), flash: takeFlash(ctx) }));
   });
 
   // ---------- calendar ----------
@@ -316,7 +339,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     const prev = month === 1 ? ym(year - 1, 12) : ym(year, month - 1);
     const next = month === 12 ? ym(year + 1, 1) : ym(year, month + 1);
     ctx.r.html(views.calendarPage({
-      user: ctx.user,
+      user: await pageUser(ctx),
       grid: await calendar.monthGrid({ shifts, rotation }, year, month),
       prevMonth: prev, nextMonth: next, thisMonth: ym(today.year, today.month),
       feedUrl: `${config.publicUrl}/calendar.ics?token=${calendar.feedToken()}`,
@@ -335,8 +358,18 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     if (!requireUser(ctx)) return;
     const status = ['open', 'acknowledged', 'resolved'].includes(ctx.query.get('status')) ? ctx.query.get('status') : null;
     const now = new Date();
+    const list = await incidents.list({ limit: 200, status });
+    // Everyone a weekend page went to, from its "Paged Ana and Ben (on call)" event (incidents.create writes it).
+    const ids = list.map((i) => i.id);
+    const pagedEvents = ids.length ? await db.all(`SELECT incident_id, message FROM incident_events
+      WHERE message LIKE 'Paged %' AND incident_id IN (${ids.map(() => '?').join(', ')}) ORDER BY id`, ids) : [];
+    const paged = new Map();
+    for (const e of pagedEvents) {
+      const names = /^Paged (.+) \(on call\)$/.exec(e.message)?.[1];
+      if (names && !paged.has(Number(e.incident_id))) paged.set(Number(e.incident_id), names.split(' and '));
+    }
     ctx.r.html(views.incidentsPage({
-      user: ctx.user, incidents: await incidents.list({ limit: 200, status }), status, stats: await incidents.stats(now), now, flash: takeFlash(ctx),
+      user: await pageUser(ctx), incidents: list, status, stats: await incidents.stats(now), now, paged, flash: takeFlash(ctx),
     }));
   });
 
@@ -352,9 +385,12 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     if (!requireUser(ctx)) return;
     const inc = (await incidents.get(Number(ctx.params.id)));
     if (!inc) throw new HttpError(404, 'Incident not found');
+    const now = new Date();
+    const who = await incidents.responsibleFor(inc);
     ctx.r.html(views.incidentPage({
-      user: ctx.user, inc, events: (await incidents.events(inc.id)), notes: await incidents.notes(inc.id),
+      user: await pageUser(ctx), inc, now, events: (await incidents.events(inc.id)), notes: await incidents.notes(inc.id),
       people: { assigned: (await rotation.userById(inc.assigned_user_id)), backup: (await rotation.userById(inc.backup_user_id)) },
+      who, escalation: escalationPlan(inc, now, who),
       notifications: (await db.all('SELECT * FROM notifications WHERE incident_id = ? ORDER BY id DESC', [inc.id])),
       names: Object.fromEntries((await db.all('SELECT slack_user_id, name FROM users WHERE slack_user_id IS NOT NULL')).map((u) => [u.slack_user_id, u.name])),
       flash: takeFlash(ctx),
@@ -383,9 +419,11 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     requireResponder(ctx);
     const role = isRole(ctx.query.get('role')) ? ctx.query.get('role') : '';
     const link = appSignInRedirect({ publicUrl: config.publicUrl, user: ctx.user });
+    const phones = await phonesByPerson();
     ctx.r.html(views.teamPage({
-      user: ctx.user, role, members: (await rotation.activeMembers()),
-      phoneApp: { qr: views.qrSvg(link), phones: await devices.listForUser(ctx.user.id) },
+      user: await pageUser(ctx), role, members: (await rotation.activeMembers()),
+      phoneApp: { qr: views.qrSvg(link), phones: phones.get(Number(ctx.user.id)) ?? [] },
+      phones,
       inactive: (await db.all('SELECT * FROM users WHERE active = 0 ORDER BY name')),
       flash: takeFlash(ctx),
     }));
@@ -479,9 +517,10 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     if (!requireUser(ctx)) return;
     requireResponder(ctx);
     ctx.r.html(views.settingsPage({
-      user: ctx.user, coverage: shifts.coverage(), domains: config.allowedEmailDomains, ping: ping.status(),
+      user: await pageUser(ctx), coverage: shifts.coverage(), domains: config.allowedEmailDomains, ping: ping.status(),
       status: { slack: slackEnabled(), api: Boolean(config.apiToken) },
       notifications: (await db.all('SELECT * FROM notifications ORDER BY id DESC LIMIT 30')),
+      names: Object.fromEntries((await db.all('SELECT slack_user_id, name FROM users WHERE slack_user_id IS NOT NULL')).map((u) => [u.slack_user_id, u.name])),
       flash: takeFlash(ctx),
     }));
   });

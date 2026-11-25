@@ -83,8 +83,6 @@ export function makeDevices(db) {
   /** Signed-in phones that can be called. */
   const forUser = (userId) => db.all(
     'SELECT * FROM devices WHERE user_id = ? AND revoked_at IS NULL AND push_token IS NOT NULL ORDER BY id', [userId]);
-  /** Every signed-in phone, for the Team page. */
-  const listForUser = (userId) => db.all('SELECT * FROM devices WHERE user_id = ? AND revoked_at IS NULL ORDER BY id', [userId]);
   const clearPushToken = (pushToken) => db.run('UPDATE devices SET push_token = NULL WHERE push_token = ?', [pushToken]);
   const revoke = (id, now = new Date()) => db.run(
     'UPDATE devices SET revoked_at = ?, push_token = NULL WHERE id = ? AND revoked_at IS NULL', [now.toISOString(), id]);
@@ -96,5 +94,5 @@ export function makeDevices(db) {
     return { id: Number(device.id), platform: device.platform, pushReady: Boolean(device.push_token), testedAt: device.tested_at ?? null, checks };
   }
 
-  return { get, create, authenticate, update, forUser, listForUser, clearPushToken, revoke, markTested, toJson };
+  return { get, create, authenticate, update, forUser, clearPushToken, revoke, markTested, toJson };
 }

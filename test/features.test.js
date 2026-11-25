@@ -143,6 +143,29 @@ test('month calendar marks each weekend with the rotation', async () => {
   assert.equal(grid.entries.length, 4);
 });
 
+test('the calendar draws each weekend as a band across its days, marks today, and lists who covers each one', async () => {
+  const { sessionCookie } = await import('../src/auth.js');
+  const { tzParts } = await import('../src/time.js');
+  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@example.com'");
+  const cookie = sessionCookie(ana.id).split(';')[0];
+  const page = async (query) => (await fetch(`${base}/calendar${query}`, { headers: { cookie } })).text();
+
+  const html = await page('?month=2026-12');
+  // Fri Dec 4, 6 PM → Mon Dec 7, 9 AM: Fri and Sat end one week row, Sun and Mon start the next.
+  assert.match(html, /<a class="band need" href="#wk-2026-12-04" style="grid-column:6 \/ span 2;[^"]*"[^>]*>[^]*?>Ben · 1 open spot<[^]*?from Fri 6:00 PM/);
+  assert.match(html, /<a class="band need" href="#wk-2026-12-04" style="grid-column:1 \/ span 2;[^"]*"[^>]*>[^]*?until Mon 9:00 AM/);
+  assert.doesNotMatch(html, /aria-current="date"/, 'today is not in December');
+
+  const weekend = html.match(/<article class="wk-item" id="wk-2026-12-04">[^]*?<\/article>/)?.[0] ?? '';
+  assert.match(weekend, /<span class="pill sm warning">Needs 1 more<\/span>/);
+  assert.match(weekend, />Ben<[^]*?From the rotation[^]*?action="\/weekends\/2026-12-04\/swap"/);
+  assert.match(weekend, /Open spot<[^]*?action="\/weekends\/2026-12-04\/join"[^]*?name="back" value="calendar"[^]*?Add me/);
+  assert.match(html, new RegExp(`value="${config.publicUrl}/calendar\\.ics\\?token=${calendar.feedToken()}"`));
+
+  const today = tzParts(new Date(), config.timezone);
+  assert.match(await page(''), new RegExp(`<span class="num" aria-current="date">${today.day}</span>`));
+});
+
 test('calendar feed needs the secret token and lists weekends', async () => {
   assert.equal((await fetch(`${base}/calendar.ics?token=nope`)).status, 404);
   const res = await fetch(`${base}/calendar.ics?token=${calendar.feedToken()}`);
@@ -175,5 +198,7 @@ test('weekend add/remove only ever changes the signed-in user, and the log is vi
   const log = await (await fetch(`${base}/log`, { headers: { cookie } })).text();
   assert.match(log, /Ana Admin<\/strong>\s*added themselves/);
   assert.match(log, /Ana Admin<\/strong>\s*removed themselves/);
+  assert.match(log, /<h2 class="log-day">Today<\/h2>/, 'grouped by day');
+  assert.match(log, /Ana Admin<\/strong>\s*added themselves to <span class="pill sm">Weekend of Dec 4, 2026<\/span>/);
   assert.equal((await fetch(`${base}/log`, { redirect: 'manual' })).status, 303, 'log needs a team sign-in');
 });

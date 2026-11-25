@@ -400,6 +400,7 @@ test('the Team page shows a one-time Phone app code and your signed-in phones', 
   assert.match(page, /<details>\s*<summary[^>]*>Show sign-in code<\/summary>[\s\S]*?<svg[^>]+aria-label="Phone app sign-in code"[\s\S]*?<\/details>/,
     'the code only shows when asked, so a screen share of the Team page does not leak it');
   assert.match(page, /Ana’s iPhone/);
+  assert.match(page, /iPhone · signed in [A-Z][a-z]{2} \d{1,2}</, 'a phone with no push token yet is listed, with when it signed in');
   assert.match(page, /Not tested yet/);
   assert.match(page, new RegExp(`action="/devices/${device.id}/revoke"`));
 
@@ -450,4 +451,355 @@ test('admins move people in the rotation from the Team page', async () => {
   assert.equal(res.status, 303);
   assert.deepEqual((await order()).slice(0, 2), [before[1], before[0]]);
   assert.equal((await post('/team/abc/move', form({ dir: '1' }), { cookie })).status, 404);
+});
+
+test('the sidebar shows who is on call, and the home page shows whether pages can reach them', async () => {
+  const cookie = cookieOf(await post('/login', form({ email: 'ana@example.com', password: 'longenough123' })));
+  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@example.com'");
+  const shift = app.shifts.currentOrNext(new Date());
+  const page = async (path) => (await fetch(base + path, { headers: { cookie } })).text();
+  const savedPush = config.push.apns.enabled;
+  let device;
+  try {
+    await post(`/weekends/${shift.key}/join`, form({}), { cookie });
+    const sidebar = await page('/incidents');
+    assert.match(sidebar, /<section class="side-oncall" aria-label="(On call now|Next weekend)">/);
+    assert.match(sidebar, new RegExp(shift.count > 1 ? `>Ana · needs ${shift.count - 1}<` : '>Ana<'));
+
+    let home = await page('/');
+    assert.match(home, /Ana Admin<\/span>[^]*?<span class="pill sm success">Slack<\/span><span class="pill sm warning">No phone<\/span>/);
+    assert.match(home, /Your phone<\/span>\s*<span[^>]*>No phone signed in/);
+
+    ({ device } = await app.devices.create(ana.id, { platform: 'ios', name: 'Ana’s iPhone' }));
+    await app.devices.update(device.id, { pushToken: 'push-token-ana' });
+    assert.match(await page('/'), /Ana’s iPhone · calls aren&#39;t set up on this server/);
+    config.push.apns.enabled = true;
+    home = await page('/');
+    assert.match(home, /<span class="pill sm success">Slack<\/span><span class="pill sm success">Phone<\/span>/);
+    assert.match(home, /Ana’s iPhone · calls work · not tested yet/);
+  } finally {
+    config.push.apns.enabled = savedPush;
+    if (device) await app.devices.revoke(device.id);
+    await app.db.run('DELETE FROM weekend_members WHERE weekend_key = ? AND user_id = ?', [shift.key, ana.id]);
+    await app.db.run('DELETE FROM roster_log WHERE weekend_key = ? AND user_id = ?', [shift.key, ana.id]);
+  }
+});
+
+test('the On call home lays out the paging plan and each open incident from the escalation settings', async () => {
+  const views = await import('../src/views.js');
+  const now = new Date();
+  const hour = 3_600_000;
+  const shift = { key: '2026-11-27', start: new Date(now - hour), end: new Date(now.getTime() + hour), count: 2 };
+  const ana = { id: 1, name: 'Ana Admin', role: 'admin', slack_user_id: 'U0ANA12345' };
+  const ben = { id: 2, name: 'Ben Carter', role: 'engineer', slack_user_id: 'U0BEN12345' };
+  const eli = { id: 3, name: 'Eli Brooks', role: 'engineer', slack_user_id: 'U0ELI12345' };
+  const cal = { id: 4, name: 'Cal Reyes', role: 'engineer', slack_user_id: 'U0CAL12345' };
+  const entry = { shift, people: [ana, ben], joined: [], needsCover: false };
+  const phones = new Map([[1, [{ id: 9, user_id: 1, platform: 'ios', name: 'Ana’s iPhone', push_token: 't', tested_at: null }]],
+    [2, [{ id: 10, user_id: 2, platform: 'ios', name: 'Ben’s iPhone', push_token: 'u', tested_at: null }]]]);
+  const inc = { id: 7, title: 'Checkout failing', status: 'open', source: 'slack', created_at: now.toISOString(),
+    assigned_name: 'Ana Admin', backup_name: 'Eli Brooks', escalation_level: 0, quiet: 0 };
+  const page = (fields) => views.dashboardPage({
+    user: { ...cal, onCall: { ...entry, running: true } }, now, onCall: entry, runningShift: shift, nextEntry: null, backup: eli,
+    schedule: [entry], coverage: app.shifts.coverage(), balance: [], recentLog: [], openIncidents: [inc], phones, flash: null, ...fields,
+  });
+  const { secondCallAfterMinutes: second, repageEveryMinutes: repage, escalateAfterMinutes: escalate } = config;
+  const channel = `#${config.slack.channelName}`;
+  const saved = config.push.apns.enabled;
+  config.push.apns.enabled = true;
+  try {
+    let html = page({});
+    assert.match(html, /<section class="side-oncall" aria-label="On call now">/);
+    assert.match(html, />Ana and Ben</);
+    assert.match(html, /role="progressbar"[^>]*aria-valuenow="50"/);
+
+    assert.match(html, new RegExp(`Now</span>.*?<span>Slack DM and a phone call to Ana and Ben, and a post in ${channel}</span>`));
+    assert.match(html, new RegExp(`${second} min</span>.*?<span>Call again, rings through Do Not Disturb</span>`));
+    assert.match(html, new RegExp(`Every ${repage} min</span>.*?<span>Page Ana and Ben again</span>`));
+    assert.match(html, new RegExp(`${escalate} min</span>.*?<span>Also page Eli Brooks, the backup \\(Slack DM only: no phone in the app\\)</span>`));
+    assert.match(html, new RegExp(`${2 * escalate} min</span>.*?<span>@channel in ${channel}</span>`));
+    assert.match(html, />Page Ana and Ben</);
+    assert.match(html, /Eli Brooks has no phone signed in to the app/);
+
+    assert.match(html, new RegExp(`Re-paging every ${repage} min`));
+    assert.match(html, new RegExp(`Eli Brooks is paged in ${escalate} min`));
+
+    // An empty weekend that reached @channel still re-pages the admins and the backup; a weekday page has no backup.
+    html = page({ openIncidents: [{ ...inc, assigned_name: null, escalation_level: 2 }] });
+    assert.match(html, new RegExp(`@channel in ${channel}</span><span class="small muted">Paging everyone every ${repage} min`));
+    assert.match(html, /Nobody is on call, so paging the admins and Eli Brooks, the backup/);
+    html = page({ openIncidents: [{ ...inc, assigned_name: null, backup_name: null, escalation_level: 2 }] });
+    assert.match(html, new RegExp(`Posted to ${channel} with @here</span><span class="small muted">Reminds ${channel} every ${2 * escalate} min`));
+
+    html = page({ user: cal, onCall: null, runningShift: null, backup: null, openIncidents: [],
+      nextEntry: { shift: { ...shift, start: new Date(now.getTime() + 48 * hour), end: new Date(now.getTime() + 100 * hour) }, people: [ana], joined: [], needsCover: true } });
+    assert.match(html, /Nobody is on call right now/);
+    assert.match(html, new RegExp(`Now</span>.*?<span>@here in ${channel}</span>`));
+    assert.match(html, new RegExp(`>Post to ${channel}<`));
+    assert.match(html, /All quiet/);
+  } finally {
+    config.push.apns.enabled = saved;
+  }
+});
+
+test('the incidents table shows who each page went to and how fast someone acknowledged it', async () => {
+  const views = await import('../src/views.js');
+  const now = new Date('2026-11-21T15:30:00Z');
+  const at = (min, sec = 0) => new Date(now.getTime() - 30 * 60_000 + min * 60_000 + sec * 1000).toISOString();
+  const blank = { source: 'slack', details: '', quiet: 0, test: 0, assigned_name: null, backup_name: null, acked_at: null, acked_by_name: null };
+  const incidents = [
+    { ...blank, id: 4, title: 'Weekday page', status: 'open', created_at: at(24), escalation_level: 2 },
+    { ...blank, id: 3, title: 'Escalated', status: 'acknowledged', created_at: at(0), acked_at: at(17), acked_by_name: 'Eli Brooks',
+      assigned_name: 'Ana Admin', backup_name: 'Eli Brooks', escalation_level: 1 },
+    { ...blank, id: 2, title: '[Test] Phone check', status: 'resolved', created_at: at(0), acked_at: at(0, 8), acked_by_name: 'Ben Carter', escalation_level: 0, test: 1 },
+    { ...blank, id: 1, title: 'FYI only', status: 'resolved', created_at: at(0), acked_at: at(3), acked_by_name: 'Ana Admin', escalation_level: 0, quiet: 1 },
+  ];
+  const stats = { open: 1, acknowledged: 1, resolved: 2, last30Days: 4, medianAckMinutes: 3 };
+  // Everyone the first page went to: Ana was on call with Ben.
+  const paged = new Map([[3, ['Ana Admin', 'Ben Carter']]]);
+  const page = (user) => views.incidentsPage({ user, incidents, status: null, stats, now, paged });
+  const html = page({ id: 2, name: 'Ben Carter', role: 'engineer' });
+  const row = (id) => html.match(new RegExp(`<tr>(?:(?!</tr>)[^])*href="/incidents/${id}"(?:(?!</tr>)[^])*</tr>`))?.[0] ?? '';
+  const channel = `#${config.slack.channelName}`;
+
+  assert.match(row(4), new RegExp(`${channel}<[^]*?Nobody on call`));
+  assert.match(row(4), /Not yet<[^]*?Waiting 6 min/);
+  assert.match(row(4), /action="\/incidents\/4\/ack"/);
+  assert.match(row(3), /Ana Admin, Ben Carter and Eli Brooks<[^]*?On call, then the backup/);
+  assert.match(row(3), /17 min<[^]*?Eli Brooks/);
+  assert.doesNotMatch(row(3), /\/ack"/, 'acknowledged: only Resolve is left');
+  assert.match(row(3), /action="\/incidents\/3\/resolve"/);
+  assert.match(row(2), /Test page: called once/);
+  assert.match(row(2), /8 sec<[^]*?Ben Carter/);
+  assert.match(row(1), new RegExp(`Posted in ${channel}, nobody called`));
+  assert.doesNotMatch(page({ id: 5, name: 'Nina Nontech', role: 'non_technical' }), /action="\/incidents\/\d+\/(ack|resolve)"/,
+    'non-technical people cannot acknowledge or resolve');
+});
+
+test('an incident page shows the escalation track, who each page reached, the timeline, notes and messages', async () => {
+  const views = await import('../src/views.js');
+  const { escalationPlan } = await import('../src/app-api.js');
+  const t0 = new Date('2026-11-21T15:00:00Z');
+  const at = (min) => new Date(t0.getTime() + min * 60_000).toISOString();
+  const time = (min) => new Intl.DateTimeFormat('en-US', { timeZone: config.timezone, hour: 'numeric', minute: '2-digit' }).format(new Date(at(min)));
+  const now = new Date(at(6));
+  const ana = { id: 1, name: 'Ana Admin', role: 'admin', slack_user_id: 'U0ANA12345' };
+  const ben = { id: 2, name: 'Ben Carter', role: 'engineer', slack_user_id: 'U0BEN12345' };
+  const eli = { id: 3, name: 'Eli Brooks', role: 'engineer', slack_user_id: 'U0ELI12345' };
+  const inc = { id: 14, title: 'Checkout failing', details: 'Checkout returns 502.', status: 'open', source: 'slack', created_at: at(0), created_by: 4,
+    assigned_user_id: 1, backup_user_id: 3, escalation_level: 0, quiet: 0, test: 0, acked_at: null, acked_by: null, resolved_at: null, resolved_by: null };
+  const who = { onCallPeople: [ana, ben], responders: [ana, ben], backup: eli };
+  const n = (id, min, channel, recipient, status, extra = {}) => ({
+    id, at: at(min), channel, recipient, body: 'Incident #14: Checkout failing', status, error: null, incident_id: 14, device_id: null, ...extra });
+  const notifications = [
+    n(1, 0, 'slack', 'Ana Admin (U0ANA12345)', 'sent'), n(2, 0, 'slack', 'Ben Carter (U0BEN12345)', 'sent'),
+    n(3, 0, 'slack', `#${config.slack.channelName} (CONCALL)`, 'sent'),
+    n(4, 0, 'push', 'Ana Admin (iPhone: Ana’s iPhone)', 'sent', { device_id: 9, body: 'Call: Checkout failing' }),
+    n(5, 0, 'push', 'Ben Carter (Android: Pixel 8)', 'failed', { device_id: 10, body: 'Call: Checkout failing', error: 'Push failed: 500' }),
+    n(6, 2, 'push', 'Ana Admin (iPhone: Ana’s iPhone)', 'sent', { device_id: 9, body: 'Call: Checkout failing' }),
+  ].reverse(); // the route reads them newest first
+  const events = [
+    { at: at(0), message: 'Triggered via slack by Cal Reyes' }, { at: at(0), message: 'Paged Ana Admin and Ben Carter (on call)' },
+    { at: at(1), message: 'Same alert again via api' }, { at: at(2), message: 'Called again so it rings through Do Not Disturb' },
+    { at: at(3), message: 'Same alert again via api' },
+  ];
+  const notes = [{ at: at(4), user_id: 4, user_name: 'Cal Reyes', text: 'Square <status> page shows an outage.' }];
+  const page = (row, extra = {}) => views.incidentPage({
+    user: { ...ben }, inc: row, now, events, notes, people: { assigned: ana, backup: eli }, who,
+    escalation: escalationPlan(row, now, who), notifications, names: {}, ...extra,
+  });
+  const steps = (html) => [...html.matchAll(/<li class="(done|next|later|skipped)[^"]*">(?:(?!<\/li>)[^])*?<span class="title">([^<]*)<\/span>/g)].map((m) => [m[2], m[1]]);
+  const reachRow = (html, name) => html.match(new RegExp(`<tr[^>]*>(?:(?!</tr>)[^])*>${name}<(?:(?!</tr>)[^])*</tr>`))?.[0] ?? '';
+
+  let html = page(inc);
+  assert.match(html, /<span class="pill open">Open<\/span>\s*<span class="muted">Open for 6 min · nobody has acknowledged yet<\/span>/);
+  assert.match(html, /Triggered by Cal Reyes/);
+  assert.match(html, /Repeated 2× · grouped, not paged again/);
+  assert.deepEqual(steps(html), escalationPlan(inc, now, who).map((s) => [s.label, s.state]));
+  assert.match(html, new RegExp(`Call Eli Brooks, the backup at ${time(15)}, in 9 min`));
+
+  assert.match(reachRow(html, 'Ana Admin'), /On call<[^]*?<span class="pill sm sent">Sent<\/span>[^]*?<span class="pill sm sent">Rang 2×<\/span>/);
+  assert.match(reachRow(html, 'Ben Carter'), /On call · you<[^]*?<span class="pill sm sent">Sent<\/span>[^]*?<span class="pill sm failed">Failed<\/span>/);
+  assert.match(reachRow(html, 'Eli Brooks'), new RegExp(`Backup<[^]*?Waiting<[^]*?At ${time(15)}`));
+  assert.match(reachRow(html, `#${config.slack.channelName}`), /<span class="pill sm sent">Posted<\/span>/);
+
+  assert.match(html, /The same alert came in 2 more times/);
+  assert.match(html, /Note from Cal Reyes/);
+  assert.match(html, /Square &lt;status&gt; page shows an outage\./);
+  assert.match(html, /Now\. Waiting for someone to acknowledge\./);
+  assert.match(html, /6 messages · 1 failed/);
+  assert.match(html, /Ana’s iPhone/);
+  assert.match(html, /Push failed: 500/);
+  assert.match(html, /action="\/incidents\/14\/ack"/);
+
+  // Ana answered the first call: the Do Not Disturb call never happened, the rest was not needed.
+  const acked = { ...inc, status: 'acknowledged', acked_at: at(1), acked_by: 1 };
+  html = page(acked, { events: [...events, { at: at(1), message: 'Acknowledged by Ana Admin via phone call' }] });
+  assert.match(html, new RegExp(`Ana Admin answered the call at ${time(1)} · paging stopped`));
+  assert.deepEqual(steps(html).map(([, state]) => state), ['done', 'done', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped']);
+  assert.match(html, new RegExp(`Paging stopped at ${time(1)}`));
+  assert.match(reachRow(html, 'Eli Brooks'), /Not needed/);
+  assert.doesNotMatch(html, /Waiting for someone to acknowledge/);
+  assert.doesNotMatch(html, /\/ack"/);
+});
+
+test('test pages and posted-only incidents read correctly on the incidents list and their own page', async () => {
+  const cookie = cookieOf(await post('/login', form({ email: 'ana@example.com', password: 'longenough123' })));
+  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@example.com'");
+  const page = async (path) => (await fetch(base + path, { headers: { cookie } })).text();
+  const channel = `#${config.slack.channelName}`;
+  const { device } = await app.devices.create(ana.id, { platform: 'ios', name: 'Ana’s iPhone' });
+  await app.devices.update(device.id, { pushToken: 'push-token-test-page' });
+  try {
+    const { incident: testPage } = await app.incidents.testPage({ title: 'Phone check', by: ana, people: [ana] });
+    const quiet = await app.incidents.create({ title: 'FYI only', quiet: true, createdBy: ana.id });
+    // A weekend page names everyone it went to in its first event; the list shows them all.
+    const weekend = await app.incidents.create({ title: 'Weekend page' }, new Date('2026-11-25T15:00:00Z'));
+    await app.db.run('INSERT INTO incident_events (incident_id, at, message) VALUES (?, ?, ?)', [weekend.id, weekend.created_at, 'Paged Ana Admin and Cal Reyes (on call)']);
+    const list = await page('/incidents');
+    const row = (id) => list.match(new RegExp(`<tr>(?:(?!</tr>)[^])*href="/incidents/${id}"(?:(?!</tr>)[^])*</tr>`))?.[0] ?? '';
+    assert.match(row(testPage.id), /Test page: called once/);
+    assert.match(row(quiet.id), new RegExp(`Posted in ${channel}, nobody called`));
+    assert.match(row(weekend.id), /Ana Admin and Cal Reyes<[^]*?On call/);
+
+    const test = await page(`/incidents/${testPage.id}`);
+    assert.match(test, /Test page: called once, never escalates/);
+    assert.doesNotMatch(test, /<ol class="esc">/, 'no escalation track');
+    assert.match(test, /Ana Admin<[^]*?<span class="pill sm sent">Sent<\/span>[^]*?<span class="pill sm dry-run">Dry run<\/span>/,
+      'the Slack DM went out; the call was a dry run (no push keys on this server)');
+
+    const posted = await page(`/incidents/${quiet.id}`);
+    assert.match(posted, new RegExp(`Posted in ${channel}, nobody called`));
+    assert.doesNotMatch(posted, /<ol class="esc">/, 'no escalation track');
+  } finally {
+    await app.devices.revoke(device.id);
+  }
+});
+
+test('the security headers let pages load the Inter font from Google Fonts and nothing else from outside', async () => {
+  const res = await fetch(base + '/login', { redirect: 'manual' });
+  assert.equal(res.headers.get('content-security-policy'),
+    "default-src 'none'; script-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
+    + "img-src data:; form-action 'self' https://accounts.google.com; frame-ancestors 'none'; base-uri 'none'");
+});
+
+test('the Team page shows who has Slack linked and a phone signed in, and your phones on the Phone app card', async () => {
+  const cookie = cookieOf(await post('/login', form({ email: 'ana@example.com', password: 'longenough123' })));
+  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@example.com'");
+  const ben = await app.db.get("SELECT * FROM users WHERE email = 'ben@example.com'");
+  const page = async () => (await fetch(base + '/team', { headers: { cookie } })).text();
+  const row = (html, name) => html.match(new RegExp(`<tr class="role-[a-z_]+">(?:(?!</tr>)[^])*>${name}<(?:(?!</tr>)[^])*</tr>`))?.[0] ?? '';
+  const tile = (html, label) => html.match(new RegExp(`${label}</div><div class="stat-value">([^<]*)</div>`))?.[1];
+  const savedPush = config.push.apns.enabled;
+  let device;
+  try {
+    await app.db.run('UPDATE users SET slack_user_id = ? WHERE id = ?', ['ben@example.com', ben.id]);
+    let html = await page();
+    assert.match(row(html, 'Ana Admin'), /<code>U0ANA12345<\/code>/);
+    assert.match(row(html, 'Ana Admin'), /No phone<[^]*?Slack DM only/);
+    assert.match(row(html, 'Ben'), /<span class="pill sm danger">Not linked<\/span>[^]*?ben@example\.com/, 'an email is not a linked Slack account');
+
+    ({ device } = await app.devices.create(ana.id, { platform: 'ios', name: 'Ana’s iPhone' }));
+    await app.devices.update(device.id, { pushToken: 'push-token-team-page' });
+    assert.match(row(await page(), 'Ana Admin'), /Ana’s iPhone<[^]*?Calls aren’t set up on this server/);
+    config.push.apns.enabled = true;
+    html = await page();
+    assert.match(row(html, 'Ana Admin'), /Ana’s iPhone<[^]*?Calls work/);
+    const card = html.match(/<section class="card" aria-label="Phone app">[^]*?<\/section>/)?.[0] ?? '';
+    assert.match(card, new RegExp(`Ana’s iPhone<[^]*?<span class="pill sm success">Calls work</span>[^]*?action="/devices/${device.id}/revoke"`));
+
+    const responders = (await app.db.all("SELECT id FROM users WHERE active = 1 AND role IN ('admin', 'engineer')")).map((u) => Number(u.id));
+    const signedIn = new Set((await app.db.all('SELECT user_id FROM devices WHERE revoked_at IS NULL')).map((d) => Number(d.user_id)));
+    const engineers = await app.db.get("SELECT COUNT(*) AS n FROM users WHERE active = 1 AND role = 'engineer'");
+    assert.equal(tile(html, 'In the rotation'), String(engineers.n));
+    assert.equal(tile(html, 'Phone app signed in'), `${responders.filter((id) => signedIn.has(id)).length} of ${responders.length}`);
+  } finally {
+    config.push.apns.enabled = savedPush;
+    if (device) await app.devices.revoke(device.id);
+    await app.db.run('UPDATE users SET slack_user_id = ? WHERE id = ?', [ben.slack_user_id, ben.id]);
+  }
+});
+
+test('Settings shows whether phone calls ring on iPhone and Android, and recent messages name people', async () => {
+  const cookie = cookieOf(await post('/login', form({ email: 'ana@example.com', password: 'longenough123' })));
+  const page = async () => (await fetch(base + '/settings', { headers: { cookie } })).text();
+  const saved = { apns: config.push.apns.enabled, fcm: config.push.fcm.serviceAccount };
+  const { id } = await app.db.get(`INSERT INTO notifications (at, channel, recipient, body, status) VALUES (?, 'slack', 'Ana Admin (U0ANA12345)', ?, 'sent') RETURNING id`,
+    [new Date().toISOString(), '<@U0ANA12345> settings check']);
+  try {
+    let html = await page();
+    assert.match(html, /iPhone calls off<[^]*?<code>APNS_KEY_ID<\/code>[^]*?<code>APNS_TEAM_ID<\/code>[^]*?<code>APNS_PRIVATE_KEY<\/code>/);
+    assert.match(html, /Android calls off<[^]*?<code>FCM_SERVICE_ACCOUNT<\/code>/);
+    assert.match(html, /@Ana Admin settings check/);
+
+    config.push.apns.enabled = true;
+    config.push.fcm.serviceAccount = { project_id: 'p', client_email: 'e@p.iam.gserviceaccount.com', private_key: 'k' };
+    html = await page();
+    assert.match(html, /iPhone calls on</);
+    assert.match(html, /Android calls on</);
+    assert.doesNotMatch(html, /APNS_KEY_ID|FCM_SERVICE_ACCOUNT/, 'nothing left to set');
+  } finally {
+    config.push.apns.enabled = saved.apns;
+    config.push.fcm.serviceAccount = saved.fcm;
+    await app.db.run('DELETE FROM notifications WHERE id = ?', [id]);
+  }
+});
+
+test('an open test page on the home page says it called once and never escalates, and a posted-only one that nobody is called', async () => {
+  const cookie = cookieOf(await post('/login', form({ email: 'ana@example.com', password: 'longenough123' })));
+  const ana = await app.db.get("SELECT * FROM users WHERE email = 'ana@example.com'");
+  const channel = `#${config.slack.channelName}`;
+  const card = (html, id) => html.match(new RegExp(`<article class="inc">(?:(?!</article>)[^])*href="/incidents/${id}"(?:(?!</article>)[^])*</article>`))?.[0] ?? '';
+  const escalating = /Re-paging|is paged in|@channel|@here|paging the admins|Reminds/;
+  const { incident: testPage } = await app.incidents.testPage({ title: 'Home card check', by: ana, people: [ana] });
+  const quiet = await app.incidents.create({ title: 'Home card FYI', quiet: true, createdBy: ana.id });
+  try {
+    const home = await (await fetch(base + '/', { headers: { cookie } })).text();
+    const test = card(home, testPage.id);
+    assert.match(test, /Test page · called once/);
+    assert.match(test, new RegExp(`Never escalates and stays out of ${channel}`));
+    assert.doesNotMatch(test, escalating);
+    const posted = card(home, quiet.id);
+    assert.match(posted, new RegExp(`Posted in ${channel}`));
+    assert.match(posted, /Nobody is called and it never escalates/);
+    assert.doesNotMatch(posted, escalating);
+  } finally {
+    for (const id of [testPage.id, quiet.id]) {
+      for (const table of ['incident_events', 'incident_notes', 'notifications']) await app.db.run(`DELETE FROM ${table} WHERE incident_id = ?`, [id]);
+      await app.db.run('DELETE FROM incidents WHERE id = ?', [id]);
+    }
+  }
+});
+
+test('only pages look up who is on call for the sidebar, and the home page shares its own lookup with it', async () => {
+  const cookie = cookieOf(await post('/login', form({ email: 'ana@example.com', password: 'longenough123' })));
+  const { feedToken } = await import('../src/calendar.js');
+  const onCallNow = app.rotation.onCallNow;
+  let lookups = 0;
+  app.rotation.onCallNow = (...args) => { lookups += 1; return onCallNow(...args); };
+  const get = async (path) => {
+    lookups = 0;
+    const res = await fetch(base + path, { redirect: 'manual', headers: { cookie } });
+    return { status: res.status, body: await res.text(), lookups };
+  };
+  try {
+    const feed = await get(`/calendar.ics?token=${feedToken()}`);
+    assert.equal(feed.status, 200);
+    assert.match(feed.body, /BEGIN:VCALENDAR/);
+    assert.equal(feed.lookups, 0, 'a calendar feed has no sidebar');
+    const redirect = await get('/login');
+    assert.equal(redirect.status, 303);
+    assert.equal(redirect.lookups, 0, 'nor does a redirect');
+
+    const home = await get('/');
+    assert.match(home.body, /<section class="side-oncall" aria-label="(On call now|Next weekend)">/);
+    assert.equal(home.lookups, 1, 'the home page and its sidebar share one lookup');
+    assert.match((await get('/log')).body, /<section class="side-oncall" aria-label="(On call now|Next weekend)">/);
+
+    lookups = 0;
+    assert.equal((await post('/theme', form({ theme: 'system', back: '/log' }), { cookie })).status, 303);
+    assert.equal(lookups, 0, 'form posts redirect, so they skip it');
+  } finally {
+    app.rotation.onCallNow = onCallNow;
+  }
 });
