@@ -2,6 +2,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import http from 'node:http';
 
 process.env.ALLOWED_EMAIL_DOMAINS = 'example.com';
 
@@ -360,9 +361,24 @@ async function slackCommand(fields, root = base) {
   const res = await fetch(`${root}/slack/commands`, {
     method: 'POST', body,
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'x-slack-request-timestamp': ts, 'x-slack-signature': sig },
+    signal: AbortSignal.timeout(2500), // Slack gives up after 3 s
   });
   assert.equal(res.status, 200);
   return res.json();
+}
+
+/** Stands in for a Slack command's response_url: resolves with the first message posted to it. */
+async function responseUrl() {
+  let resolve;
+  const posted = new Promise((r) => { resolve = r; });
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => { res.end('ok'); resolve(JSON.parse(body)); });
+  });
+  await new Promise((r) => server.listen(0, r));
+  const late = new Promise((_, reject) => setTimeout(() => reject(new Error('nothing was posted to response_url')), 3000).unref());
+  return { url: `http://localhost:${server.address().port}/`, posted: Promise.race([posted, late]).finally(() => server.close()) };
 }
 
 async function addPerson(name) {
@@ -381,10 +397,14 @@ test('/page test call me rings only you with a test incident that never escalate
   pushed.length = 0;
   sent.length = 0;
 
-  const reply = await slackCommand({ command: '/page', text: 'test call me Checkout is broken', user_id: dee.slack_user_id });
+  const slack = await responseUrl();
+  const reply = await slackCommand({ command: '/page', text: 'test call me Checkout is broken', user_id: dee.slack_user_id, response_url: slack.url });
   assert.equal(reply.response_type, 'ephemeral', 'only you see it');
-  assert.match(reply.text, /Test page #\d+/);
-  assert.match(reply.text, /Calling Dee/);
+  assert.match(reply.text, /Calling you/);
+  const result = await slack.posted;
+  assert.equal(result.response_type, 'ephemeral');
+  assert.match(result.text, /Test page #\d+/);
+  assert.match(result.text, /Calling Dee/);
   const inc = await db.get('SELECT * FROM incidents ORDER BY id DESC LIMIT 1');
   assert.equal(inc.title, '[Test] Checkout is broken');
   assert.equal(Number(inc.test), 1);
@@ -416,8 +436,11 @@ test('/page test call everyone rings every engineer and admin, once', async () =
   pushed.length = 0;
   sent.length = 0;
 
-  const reply = await slackCommand({ command: '/page', text: 'TEST call everyone', user_id: fay.slack_user_id });
+  const slack = await responseUrl();
+  const reply = await slackCommand({ command: '/page', text: 'TEST call everyone', user_id: fay.slack_user_id, response_url: slack.url });
   assert.equal(reply.response_type, 'in_channel', 'the channel sees why everyone is being called');
+  assert.match(reply.text, /Calling every engineer and admin/);
+  assert.equal((await slack.posted).response_type, 'in_channel');
   const inc = await db.get('SELECT * FROM incidents ORDER BY id DESC LIMIT 1');
   assert.equal(inc.title, '[Test] Test page', 'a default title');
   assert.deepEqual(new Set(pushed.map((p) => Number(p.device.user_id))),
@@ -452,9 +475,30 @@ test("without push keys, test calls and test pages say calls aren't set up inste
     const res = await fetch(`${bareBase}/api/app/device/test-call`, { method: 'POST', headers: headers(phone), body: '{}' });
     assert.equal(res.status, 503);
     assert.match((await res.json()).error, /calls aren't set up on this server/);
-    const { text } = await slackCommand({ command: '/page', text: 'test call me x', user_id: hal.slack_user_id }, bareBase);
-    assert.match(text, /calls aren't set up on this server/);
+    const slack = await responseUrl();
+    await slackCommand({ command: '/page', text: 'test call me x', user_id: hal.slack_user_id, response_url: slack.url }, bareBase);
+    assert.match((await slack.posted).text, /calls aren't set up on this server/);
   } finally {
     bare.server.close();
+  }
+});
+
+test('/page test answers Slack at once, then posts who it reached when the calls are done', async () => {
+  let release;
+  const callsDone = new Promise((r) => { release = r; });
+  const slow = createApp({ db, notifierOverrides: { slack: async () => {}, push: async () => { await callsDone; } } });
+  await new Promise((r) => slow.server.listen(0, r));
+  try {
+    const ivy = await addPerson('Ivy');
+    await postJson('/api/app/device', { pushToken: 'voip-ivy' }, await signIn(ivy));
+    const slack = await responseUrl();
+    const reply = await slackCommand({ command: '/page', text: 'test call me x', user_id: ivy.slack_user_id, response_url: slack.url },
+      `http://localhost:${slow.server.address().port}`);
+    assert.match(reply.text, /Calling you/, 'Slack hears back while the phone is still being called');
+    release();
+    assert.match((await slack.posted).text, /Calling Ivy/);
+  } finally {
+    release();
+    slow.server.close();
   }
 });

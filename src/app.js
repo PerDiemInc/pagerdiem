@@ -518,7 +518,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   }
 
   /** `/page test call me|everyone <what broke>`: a test incident that calls you, or every engineer and admin, once. */
-  async function slackTestPage(what, asker) {
+  async function slackTestPage(what, asker, responseUrl) {
     const reply = (text, responseType = 'ephemeral') => ({ response_type: responseType, text });
     const match = /^test\s+call\s+(me|everyone)(?:\s+(.*))?$/i.exec(what);
     if (!match) {
@@ -532,16 +532,25 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
       return reply('No phone of yours is signed in to the PagerDiem app. Scan the code on the web Team page with the app.');
     }
     const people = everyone ? (await rotation.activeMembers()).filter(isResponder) : [asker];
-    const { incident, called } = await incidents.testPage({ title: match[2], by: asker, people });
-    const lines = called.map(({ user, calls }) => {
-      const name = slackText(user.name);
-      if (!calls.length) return `:no_mobile_phones: ${name} has no phone signed in to the app`;
-      if (calls.some((c) => c.ok && !c.dryRun)) return `:telephone_receiver: Calling ${name}`;
-      if (calls.every((c) => c.dryRun)) return `:no_bell: ${name}: phone calls aren't set up on this server (no push keys), so nothing rang`;
-      return `:x: Couldn't reach ${name}: ${calls.find((c) => !c.ok)?.error?.message || 'push failed'}`;
-    });
-    const head = `:test_tube: Test page #${incident.id} *${slackText(incident.title)}* from ${mention(asker)}. It calls once and never escalates.`;
-    return reply([head, ...lines].join('\n'), everyone ? 'in_channel' : 'ephemeral');
+    const responseType = everyone ? 'in_channel' : 'ephemeral';
+    // Slack gives up on a command after 3 seconds and calling everyone takes longer, so answer
+    // now and post who it reached to the command's response_url once the calls are done.
+    incidents.testPage({ title: match[2], by: asker, people }).then(({ incident, called }) => {
+      const lines = called.map(({ user, calls }) => {
+        const name = slackText(user.name);
+        if (!calls.length) return `:no_mobile_phones: ${name} has no phone signed in to the app`;
+        if (calls.some((c) => c.ok && !c.dryRun)) return `:telephone_receiver: Calling ${name}`;
+        if (calls.every((c) => c.dryRun)) return `:no_bell: ${name}: phone calls aren't set up on this server (no push keys), so nothing rang`;
+        return `:x: Couldn't reach ${name}: ${calls.find((c) => !c.ok)?.error?.message || 'push failed'}`;
+      });
+      const head = `:test_tube: Test page #${incident.id} *${slackText(incident.title)}* from ${mention(asker)}. It calls once and never escalates.`;
+      return fetch(responseUrl, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ response_type: responseType, text: [head, ...lines].join('\n') }),
+      });
+    }).catch((err) => console.error('slack /page test failed:', err.message));
+    return reply(everyone ? ':test_tube: Calling every engineer and admin with a test page. Who it reached follows here.'
+      : ':test_tube: Calling you with a test page. What happened follows here.', responseType);
   }
 
   router.post('/slack/commands', async (ctx) => {
@@ -551,7 +560,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     if (command === '/page' || (command !== '/oncall' && title.toLowerCase().startsWith('page '))) {
       const what = command === '/page' ? title : title.slice(5).trim();
       if (!what) return ctx.r.json({ response_type: 'ephemeral', text: 'Usage: `/page <what is broken>`, or `/page test call me` to try it on your own phone.' });
-      if (/^test(\s|$)/i.test(what)) return ctx.r.json(await slackTestPage(what, await userBySlack(slackUser)));
+      if (/^test(\s|$)/i.test(what)) return ctx.r.json(await slackTestPage(what, await userBySlack(slackUser), ctx.body.response_url));
       const creator = (await userBySlack(slackUser));
       const onCall = (await rotation.onCallNow());
       // Slack needs an answer within 3 seconds, so page in the background.
