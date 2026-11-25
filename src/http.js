@@ -29,7 +29,7 @@ export function parseBody(raw, contentType = '') {
 }
 
 const SECURITY_HEADERS = {
-  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data:; form-action 'self' https://accounts.google.com; frame-ancestors 'none'; base-uri 'none'",
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:; form-action 'self' https://accounts.google.com; frame-ancestors 'none'; base-uri 'none'",
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
   'X-Frame-Options': 'DENY',
