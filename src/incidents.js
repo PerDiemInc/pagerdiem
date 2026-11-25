@@ -49,7 +49,7 @@ export function makeIncidents({ db, rotation, notify }) {
   function callPayload(inc, { reason, attempt, nextCallAt, pagedBy, now }) {
     return {
       type: 'page', callId: crypto.randomUUID(), incidentId: String(inc.id), title: inc.title, reason,
-      pagedBy: pagedBy ?? '', attempt, nextCallAt: nextCallAt.toISOString(), server: config.publicUrl, sentAt: now.toISOString(),
+      pagedBy: pagedBy ?? '', attempt, nextCallAt: nextCallAt ? nextCallAt.toISOString() : '', server: config.publicUrl, sentAt: now.toISOString(),
     };
   }
 
@@ -185,6 +185,26 @@ export function makeIncidents({ db, rotation, notify }) {
     return { ...(await get(inc.id)), paged };
   }
 
+  /**
+   * A test page from `/page test call me|everyone`: a real incident, titled "[Test] …", that calls
+   * these people once. It never calls again or escalates, and stays out of the team channel.
+   * Returns the incident and each person's call results.
+   */
+  async function testPage({ title, by, people, source = 'slack' }, now = new Date()) {
+    title = `[Test] ${String(title || '').trim() || 'Test page'}`.slice(0, 200);
+    const iso = now.toISOString();
+    const { id } = await db.get(`
+      INSERT INTO incidents (title, details, source, escalation_level, ack_token, created_by, created_at, last_paged_at, test)
+      VALUES (?, '', ?, 0, ?, ?, ?, ?, 1) RETURNING id`, [title, source, crypto.randomBytes(16).toString('hex'), by.id, iso, iso]);
+    const inc = await get(Number(id));
+    await event(inc.id, `Test page via ${source} by ${by.name}: called ${people.map((p) => p.name).join(', ')} once`, now);
+    const reason = `Test page from ${by.name}. Answer it to try PagerDiem; it won't call again.`;
+    const rings = [];
+    for (const p of people) rings.push(await page(inc, p, reason, { attempt: 1, nextCallAt: null, now }));
+    const calls = await Promise.all(rings.map((ring) => ring()));
+    return { incident: inc, called: people.map((user, i) => ({ user, calls: calls[i] })) };
+  }
+
   /** " cc @a @b" for the people on call when the incident started (minus whoever acted). */
   async function onCallTags(inc, actor) {
     const onCall = await rotation.onCallNow(new Date(inc.created_at));
@@ -200,7 +220,7 @@ export function makeIncidents({ db, rotation, notify }) {
     const { changes } = await db.run(`UPDATE incidents SET status = 'acknowledged', acked_at = ?, acked_by = ? WHERE id = ? AND status = 'open'`, [now.toISOString(), user?.id ?? null, id]);
     if (!changes) return { incident: await get(id), changed: false };
     await event(id, `Acknowledged by ${user?.name ?? 'someone'} via ${via}`, now);
-    await notify.channel({
+    if (!inc.test) await notify.channel({
       text: `:eyes: Incident #${id} *${slackText(inc.title)}* acknowledged by ${mention(user)}.${await onCallTags(inc, user)}`, incidentId: id,
     });
     await notify.cancelCalls(id);
@@ -215,7 +235,7 @@ export function makeIncidents({ db, rotation, notify }) {
                 acked_at = COALESCE(acked_at, ?), acked_by = COALESCE(acked_by, ?) WHERE id = ? AND status != 'resolved'`, [now.toISOString(), user?.id ?? null, now.toISOString(), user?.id ?? null, id]);
     if (!changes) return { incident: await get(id), changed: false };
     await event(id, `Resolved by ${user?.name ?? 'someone'} via ${via}`, now);
-    await notify.channel({
+    if (!inc.test) await notify.channel({
       text: `:white_check_mark: Incident #${id} *${slackText(inc.title)}* resolved by ${mention(user)}.${await onCallTags(inc, user)}`, incidentId: id,
     });
     await notify.cancelCalls(id);
@@ -231,7 +251,7 @@ export function makeIncidents({ db, rotation, notify }) {
   async function tick(now = new Date()) {
     if (idle) return;
     const seen = created;
-    const open = (await db.all(`SELECT * FROM incidents WHERE status = 'open' AND quiet = 0 AND created_at >= ?`,
+    const open = (await db.all(`SELECT * FROM incidents WHERE status = 'open' AND quiet = 0 AND test = 0 AND created_at >= ?`,
       [new Date(now.getTime() - PAGE_FOR).toISOString()]));
     if (!open.length && seen === created) idle = true;
     for (const inc of open) {
@@ -321,17 +341,18 @@ export function makeIncidents({ db, rotation, notify }) {
     const inc = await getActive(id);
     if (inc.status !== 'open') throw new HttpError(409, 'This incident is already acknowledged, so paging has stopped.');
     if (inc.quiet) throw new HttpError(409, 'This incident was posted without calling anyone.');
+    if (inc.test) throw new HttpError(409, 'This is a test page, so nobody is called again.');
     return inc;
   }
 
   /** Add a note to an incident. It's posted in the on-call channel too. */
   async function addNote(id, user, text, via = 'web', now = new Date()) {
-    await getActive(id);
+    const inc = await getActive(id);
     text = String(text || '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim().slice(0, 2000);
     if (!text) throw new HttpError(400, 'Write a note first.');
     const { id: noteId } = await db.get('INSERT INTO incident_notes (incident_id, user_id, at, text) VALUES (?, ?, ?, ?) RETURNING id',
       [id, user.id, now.toISOString(), text]);
-    await notify.channel({ text: `:memo: Note on #${id} from ${mention(user)}: ${slackText(text)}`, incidentId: id });
+    if (!inc.test) await notify.channel({ text: `:memo: Note on #${id} from ${mention(user)}: ${slackText(text)}`, incidentId: id });
     return { id: Number(noteId), at: now.toISOString(), text, user };
   }
 
@@ -426,7 +447,7 @@ export function makeIncidents({ db, rotation, notify }) {
   }
 
   return {
-    create, acknowledge, resolve, tick, get, events, list, stats, latestOpenFor,
+    create, testPage, acknowledge, resolve, tick, get, events, list, stats, latestOpenFor,
     addNote, notes, callAgain, callBackupNow, recentTitles, responsibleFor,
   };
 }

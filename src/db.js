@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS incidents (
   acked_by          INTEGER REFERENCES users(id),
   resolved_at       TEXT,
   resolved_by       INTEGER REFERENCES users(id),
-  quiet             INTEGER NOT NULL DEFAULT 0   -- 1: posted in the channel without calling anyone; never escalates
+  quiet             INTEGER NOT NULL DEFAULT 0,  -- 1: posted in the channel without calling anyone; never escalates
+  test              INTEGER NOT NULL DEFAULT 0   -- 1: a test page from /page test; calls once, never escalates or posts in the channel
 );
 CREATE INDEX IF NOT EXISTS incidents_open ON incidents(status) WHERE status != 'resolved';
 CREATE TABLE IF NOT EXISTS incident_events (
@@ -161,6 +162,7 @@ const PG_SCHEMA = SQLITE_SCHEMA
 // Columns added after the first release. Older databases get them at startup.
 const ADDED_COLUMNS = [
   ['incidents', 'quiet', 'INTEGER NOT NULL DEFAULT 0'],
+  ['incidents', 'test', 'INTEGER NOT NULL DEFAULT 0'],
   ['swaps', 'trade_id', 'INTEGER'], // the other half of a two-way trade
   ['notifications', 'device_id', 'INTEGER'], // the phone a push went to
 ];

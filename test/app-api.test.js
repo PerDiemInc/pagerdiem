@@ -372,47 +372,88 @@ async function addPerson(name) {
   return db.get('SELECT * FROM users WHERE name = ?', [name]);
 }
 
-test('/page test in Slack rings only your own phones, and answering marks the phone tested', async () => {
+const channelPosts = () => sent.filter((m) => m.to === 'CONCALL');
+
+test('/page test call me rings only you with a test incident that never escalates or posts in the channel', async () => {
   const dee = await addPerson('Dee');
   const phone = await signIn(dee);
-  const tablet = await signIn(dee);
   await postJson('/api/app/device', { pushToken: 'voip-dee' }, phone);
-  await postJson('/api/app/device', { pushToken: 'voip-dee-2' }, tablet);
-  const incidents = (await db.get('SELECT COUNT(*) AS n FROM incidents')).n;
   pushed.length = 0;
   sent.length = 0;
 
-  const reply = await slackCommand({ command: '/page', text: ' Test ', user_id: dee.slack_user_id });
+  const reply = await slackCommand({ command: '/page', text: 'test call me Checkout is broken', user_id: dee.slack_user_id });
   assert.equal(reply.response_type, 'ephemeral', 'only you see it');
-  assert.equal(reply.text.match(/Calling Dee's phone/g)?.length, 2);
-  assert.deepEqual(pushed.map((p) => [p.device.push_token, p.payload.type]).sort(), [['voip-dee', 'test'], ['voip-dee-2', 'test']]);
-  assert.equal((await db.get('SELECT COUNT(*) AS n FROM incidents')).n, incidents, 'no incident');
-  assert.deepEqual(sent, [], 'nobody else is told');
+  assert.match(reply.text, /Test page #\d+/);
+  assert.match(reply.text, /Calling Dee/);
+  const inc = await db.get('SELECT * FROM incidents ORDER BY id DESC LIMIT 1');
+  assert.equal(inc.title, '[Test] Checkout is broken');
+  assert.equal(Number(inc.test), 1);
+  assert.deepEqual(pushed.map((p) => [p.device.push_token, p.payload.type, p.payload.incidentId, p.payload.nextCallAt]),
+    [['voip-dee', 'page', String(inc.id), '']], 'one call, and no next call promised');
+  assert.deepEqual(sent.map((m) => m.to), [dee.slack_user_id], 'a DM to you, nothing in the channel');
 
-  const { callId } = pushed.find((p) => p.device.push_token === 'voip-dee').payload;
-  const res = await postJson('/api/app/device/test-call/answered', { callId }, phone);
-  assert.equal(res.status, 200);
-  assert.ok((await res.json()).testedAt);
+  // Nobody answers: it still never calls again, escalates or reminds the channel.
+  pushed.length = 0;
+  sent.length = 0;
+  for (const min of [3, 16, 31, 60]) await app.incidents.tick(new Date(new Date(inc.created_at).getTime() + min * 60_000));
+  assert.deepEqual([pushed.length, sent.length], [0, 0]);
+
+  // Answering acknowledges it like a real page, without telling the channel.
+  assert.equal((await postJson(`/api/app/incidents/${inc.id}/call-again`, {}, phone)).status, 409);
+  assert.equal((await postJson(`/api/app/incidents/${inc.id}/ack`, { via: 'phone call' }, phone)).status, 200);
+  assert.equal((await postJson(`/api/app/incidents/${inc.id}/resolve`, {}, phone)).status, 200);
+  assert.equal((await db.get('SELECT status FROM incidents WHERE id = ?', [inc.id])).status, 'resolved');
+  assert.deepEqual(channelPosts(), []);
 });
 
-test('/page test in Slack says why nothing rang', async () => {
-  assert.match((await slackCommand({ command: '/page', text: 'test', user_id: 'UNOBODY000' })).text, /isn't linked to anyone/);
-  const eve = await addPerson('Eve');
-  assert.match((await slackCommand({ command: '/page', text: 'test', user_id: eve.slack_user_id })).text, /No phone of yours/);
+test('/page test call everyone rings every engineer and admin, once', async () => {
+  const fay = await addPerson('Fay');
+  const phone = await signIn(fay);
+  await postJson('/api/app/device', { pushToken: 'voip-fay' }, phone);
+  const responders = await db.all("SELECT * FROM users WHERE active = 1 AND role IN ('engineer', 'admin')");
+  const withPhones = new Set((await db.all(`SELECT DISTINCT user_id FROM devices
+    WHERE revoked_at IS NULL AND push_token IS NOT NULL`)).map((d) => Number(d.user_id)));
+  pushed.length = 0;
+  sent.length = 0;
 
-  // A server without push keys says so, here and in the app, instead of pretending to ring.
+  const reply = await slackCommand({ command: '/page', text: 'TEST call everyone', user_id: fay.slack_user_id });
+  assert.equal(reply.response_type, 'in_channel', 'the channel sees why everyone is being called');
+  const inc = await db.get('SELECT * FROM incidents ORDER BY id DESC LIMIT 1');
+  assert.equal(inc.title, '[Test] Test page', 'a default title');
+  assert.deepEqual(new Set(pushed.map((p) => Number(p.device.user_id))),
+    new Set(responders.map((u) => Number(u.id)).filter((id) => withPhones.has(id))));
+  assert.ok(pushed.every((p) => p.payload.incidentId === String(inc.id)));
+  assert.deepEqual(new Set(sent.map((m) => m.to)), new Set(responders.map((u) => u.slack_user_id)), 'a DM each, nothing in the channel');
+});
+
+test('/page test explains how to use it and who may call everyone', async () => {
+  for (const text of ['test', 'test checkout is broken', 'test call nobody']) {
+    assert.match((await slackCommand({ command: '/page', text, user_id: people.ana.slack_user_id })).text, /test call me/, text);
+  }
+  assert.match((await slackCommand({ command: '/page', text: 'test call me x', user_id: 'UNOBODY000' })).text, /isn't linked to anyone/);
+  const gus = await addPerson('Gus');
+  await db.run("UPDATE users SET role = 'non_technical' WHERE id = ?", [gus.id]);
+  const incidents = (await db.get('SELECT COUNT(*) AS n FROM incidents')).n;
+  assert.match((await slackCommand({ command: '/page', text: 'test call everyone x', user_id: gus.slack_user_id })).text,
+    /Only engineers and admins/);
+  assert.equal((await db.get('SELECT COUNT(*) AS n FROM incidents')).n, incidents, 'no incident');
+  assert.match((await slackCommand({ command: '/page', text: 'test call me x', user_id: gus.slack_user_id })).text,
+    /No phone of yours/, 'anyone can test their own phone');
+});
+
+test("without push keys, test calls and test pages say calls aren't set up instead of pretending to ring", async () => {
+  const hal = await addPerson('Hal');
   const bare = createApp({ db, notifierOverrides: { slack: async () => {} } });
   await new Promise((r) => bare.server.listen(0, r));
   const bareBase = `http://localhost:${bare.server.address().port}`;
   try {
-    const phone = await signIn(eve);
-    await postJson('/api/app/device', { pushToken: 'voip-eve' }, phone);
-    const { text } = await slackCommand({ command: '/page', text: 'test', user_id: eve.slack_user_id }, bareBase);
-    assert.match(text, /calls aren't set up on this server/);
-    assert.match(text, /APNS_KEY_ID/);
+    const phone = await signIn(hal);
+    await postJson('/api/app/device', { pushToken: 'voip-hal' }, phone);
     const res = await fetch(`${bareBase}/api/app/device/test-call`, { method: 'POST', headers: headers(phone), body: '{}' });
     assert.equal(res.status, 503);
     assert.match((await res.json()).error, /calls aren't set up on this server/);
+    const { text } = await slackCommand({ command: '/page', text: 'test call me x', user_id: hal.slack_user_id }, bareBase);
+    assert.match(text, /calls aren't set up on this server/);
   } finally {
     bare.server.close();
   }

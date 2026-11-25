@@ -62,7 +62,7 @@ export async function toIncidents(db, rows) {
     WHERE message LIKE 'Same alert again%' GROUP BY incident_id`)).map((r) => [Number(r.incident_id), Number(r.n)]));
   const person = (id) => toPerson(users.get(Number(id)));
   return rows.map((row) => ({
-    id: Number(row.id), title: row.title, status: row.status, source: row.source, quiet: Boolean(Number(row.quiet)),
+    id: Number(row.id), title: row.title, status: row.status, source: row.source, quiet: Boolean(Number(row.quiet)), test: Boolean(Number(row.test)),
     createdAt: row.created_at, createdBy: person(row.created_by), assigned: person(row.assigned_user_id),
     ackedBy: person(row.acked_by), ackedAt: row.acked_at ?? null, resolvedAt: row.resolved_at ?? null,
     repeats: repeats.get(Number(row.id)) ?? 0,
@@ -97,6 +97,7 @@ export function escalationPlan(inc, now, who) {
   const channel = `#${config.slack.channelName}`;
   const stopped = inc.status !== 'open';
   if (Number(inc.quiet)) return [{ at: at(0), label: `Posted in ${channel}, nobody called`, state: 'done' }];
+  if (Number(inc.test)) return [{ at: at(0), label: 'Test page: called once, never escalates', state: 'done' }];
   const { secondCallAfterMinutes: second, repageEveryMinutes: repage, escalateAfterMinutes: escalate } = config;
   if (!who) {
     return [
