@@ -1,12 +1,12 @@
-# PagerDiem 📟
+# <img src="docs/images/logo.svg" alt="" width="40" height="40" align="top"> PagerDiem
 
 [![ci](https://github.com/PerDiemInc/pagerdiem/actions/workflows/ci.yml/badge.svg)](https://github.com/PerDiemInc/pagerdiem/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [Project site](https://perdieminc.github.io/pagerdiem/)
 
 **Self-hosted weekend on-call for small engineering teams.** A fair rotation, Slack paging with
-escalation, a shared calendar, and sign-in locked to your Google Workspace. One Node.js process,
-one database, no per-seat pricing.
+escalation, a phone app whose pages ring like a phone call, a shared calendar, and sign-in locked
+to your Google Workspace. One Node.js process, one database, no per-seat pricing.
 
 ![On-call dashboard](docs/images/dashboard.jpg)
 
@@ -26,7 +26,8 @@ It runs on-prem or in your own cloud account. There is no subscription and no pe
 | **Self-service** | Anyone can **add themselves** to a weekend (no limit) or **remove themselves** before it starts (once it has started, someone takes their spot instead). Weekends below the target are flagged *needs cover*. |
 | **Swap with undo** | On the calendar, **Swap** next to a name takes that person's spot. You get 10 seconds to undo before they and Slack are told. |
 | **Slack paging** | Page from the web app, `/page <what broke>` in Slack, or the HTTP API. Everyone on call gets a DM with **Acknowledge / Resolve** buttons; the channel is told, with on-call people @-tagged. |
-| **Escalation** | No acknowledgement → re-page every 5 min → page the backup at 15 min → `@channel` at 30 min → keep paging everyone every 5 min until someone acknowledges (automatic paging stops after 24 h). A weekend with nobody on call pages the admins instead. On weekdays pages go to the channel, with a reminder every 30 min. API alerts with the same title as an unresolved incident join it instead of paging again. |
+| **Phone app** | Pages ring your iPhone like a phone call, even when the app is closed or the phone is locked. Answering acknowledges the page and stops paging for everyone. From the app you can also page on-call, acknowledge, resolve and add notes, see the schedule and swap weekends. Android is next. See [Phone app](#phone-app). |
+| **Escalation** | No acknowledgement → call the phones again at 2 min, so the call gets through Do Not Disturb → re-page every 5 min → page the backup at 15 min → `@channel` at 30 min → keep paging everyone every 5 min until someone acknowledges (automatic paging stops after 24 h). A weekend with nobody on call pages the admins instead. On weekdays pages go to the channel, with a reminder every 30 min. API alerts with the same title as an unresolved incident join it instead of paging again. |
 | **Reminders** | DM 24 hours before your weekend, a "you're on call now" DM when it starts, and a hand-off summary in the channel when it ends. |
 | **Calendar** | Month view of who's on call, plus a feed you can subscribe to from Google Calendar. |
 | **Audit log** | Every add, remove and swap, grouped by day, visible to the whole team. |
@@ -46,6 +47,21 @@ It runs on-prem or in your own cloud account. There is no subscription and no pe
 </table>
 
 ![Incident with timeline](docs/images/incident.jpg)
+
+<table>
+<tr>
+<td><img src="docs/images/app-on-call.jpg" alt="Phone app: your shift and the incidents that need you" width="200"></td>
+<td><img src="docs/images/app-page.jpg" alt="Phone app: a page you answered, with the time it took to acknowledge" width="200"></td>
+<td><img src="docs/images/app-compose.jpg" alt="Phone app: paging on-call, with a hold-to-call button" width="200"></td>
+<td><img src="docs/images/app-schedule.jpg" alt="Phone app: the weekend schedule" width="200"></td>
+</tr>
+<tr>
+<td align="center">On call</td>
+<td align="center">A page you answered</td>
+<td align="center">Page on-call</td>
+<td align="center">Schedule</td>
+</tr>
+</table>
 
 ## Quick start (local)
 
@@ -111,6 +127,9 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 | `ON_CALL_DAYS`, `ON_CALL_START`, `ON_CALL_END` | | Days that need cover, e.g. `FRI,SAT,SUN`, and the shift's start and end time (`18:00`, `09:00`). Win over `SHIFT_START` / `SHIFT_END` when set. |
 | `PEOPLE_ON_WEEKEND_DAYS`, `PEOPLE_ON_WEEKDAYS` | | People per shift on weekend days and on weekdays. Default `PEOPLE_PER_WEEKEND`. |
 | `REMINDER_HOURS_BEFORE`, `REPAGE_EVERY_MINUTES`, `ESCALATE_AFTER_MINUTES` | | Defaults `24`, `5`, `15` |
+| `SECOND_CALL_AFTER_MINUTES` | | Default `2`. When the phone app calls again, so the second call gets through Do Not Disturb. |
+| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_PRIVATE_KEY`, `APNS_ENV`, `APNS_BUNDLE_ID` | for iPhone calls | Push keys for the phone app. See [Phone app](#phone-app). |
+| `FCM_SERVICE_ACCOUNT` | for Android calls | Firebase service account JSON. See [Phone app](#phone-app). |
 | `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` | for Slack | From your Slack app |
 | `SLACK_ONCALL_CHANNEL` | for Slack | Channel ID for on-call posts (invite the bot) |
 | `SLACK_ONCALL_CHANNEL_NAME` | | The channel's name, shown in messages (default `on-call`) |
@@ -135,11 +154,37 @@ Everything company-specific is an environment variable. See [.env.example](.env.
   ```
 
   Point Sentry, Datadog, Grafana or CI alerts at `POST /api/incidents`.
-- **Phone app:** pages ring your phone like a call, next to the Slack DM. Sign in by scanning the
-  **Phone app** code on the Team page, or with Google from the app. Answering the call acknowledges
-  the page. Calls need push keys for the app's publisher: `APNS_KEY_ID`, `APNS_TEAM_ID` and
-  `APNS_PRIVATE_KEY` for iPhone, and `FCM_SERVICE_ACCOUNT` for Android (see [docs/deploy-render-slack.md](docs/deploy-render-slack.md)). Without
-  them, calls are only logged as `dry-run` under Settings → Recent messages.
+- **Phone app:** see [Phone app](#phone-app) below.
+
+## Phone app
+
+The PagerDiem app (in [`mobile/`](mobile/), built with Expo) makes a page ring like a phone call,
+next to the Slack DM.
+
+- **Sign in** by scanning the **Phone app** code on the web Team page with the app. The code works
+  once, for 10 minutes. You can also sign in with Google from the app.
+- **When you're paged,** your phone rings with the incident as the caller. Answer to acknowledge:
+  paging stops for everyone, and a notification opens the page. Nobody answering means a second
+  call at 2 minutes (it gets through Do Not Disturb), then the normal escalation.
+- **Wake-up checks** on the **You** tab make sure calls can reach you: notifications, Focus, and a
+  test call (**Ring me now**).
+- **Everything else on the go:** who's on call and for how long, page on-call (hold to call, or post
+  in the channel without waking anyone), acknowledge, resolve, notes, the schedule, swaps and the team.
+
+**Calls need the push keys of whoever publishes the app.** Set them on the server; without them,
+calls are only logged as `dry-run` under **Settings → Recent messages**. Where to get each one is in
+[docs/deploy-render-slack.md](docs/deploy-render-slack.md#6-phone-calls-optional).
+
+| Variable | For |
+|---|---|
+| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_PRIVATE_KEY` | iPhone: an APNs key from Apple Developer, and its `.p8` contents |
+| `APNS_ENV` | `production` (default) for TestFlight and App Store builds; `development` for Xcode builds |
+| `APNS_BUNDLE_ID` | Only if your build uses another bundle id (default `com.tryperdiem.pagerdiem`) |
+| `FCM_SERVICE_ACCOUNT` | Android: the Firebase service account JSON |
+
+**Build your own.** Push keys belong to the app's publisher, so a team running its own PagerDiem
+publishes its own build. The app's name, bundle id and Apple team come from the environment; see
+[mobile/README.md](mobile/README.md) and the [release checklist](mobile/docs/release-checklist.md).
 
 ## How the rotation works
 
@@ -169,12 +214,14 @@ Databases created before roles existed are migrated on first start: admins stay 
 
 - Production sign-in is Google only, restricted to `ALLOWED_EMAIL_DOMAINS` on a Workspace-managed account. Set the OAuth consent screen to **Internal** for a second lock at Google's end.
 - Slack requests are verified with the signing secret and, with `SLACK_TEAM_ID`, restricted to your workspace.
+- Each phone signed in to the app gets its own random token, stored only as a hash. Sign a phone out from the Team page or the app; removing someone signs out all their phones. Sign-in codes work once and expire after 10 minutes, and Google sign-in from the app only completes in the app that started it.
 - The API requires a bearer token. The calendar feed uses an unguessable link; set a new `CALENDAR_FEED_SECRET` to revoke it, for example after someone leaves.
 - See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## Development
 
 - Plain Node.js, no framework. The only runtime dependency is `pg`.
+- The phone app lives in [`mobile/`](mobile/) (Expo, React Native). See [mobile/README.md](mobile/README.md).
 - PostgreSQL is the database. The SQL also runs on SQLite, which keeps `npm test` fast and free of dependencies. `npm run test:pg` runs the same tests on the Docker PostgreSQL (against a separate `pagerdiem_test` database that it wipes).
 - Tests: `npm test`, or against Postgres with `TEST_DATABASE_URL=postgres://… npm test` (wipes that database).
 
@@ -191,11 +238,15 @@ Databases created before roles existed are migrated on first start: admins stay 
 | `src/calendar.js` | The month grid and the Google Calendar feed |
 | `src/ping.js` | The optional `/ping` AI check |
 | `src/auth.js`, `src/google.js` | Sessions, and Google sign-in restricted to your Workspace |
-| `src/notify/` | Slack client and dry-run logging |
+| `src/actions.js` | Sign-up, profile, weekend, team and settings changes shared by the web and the phone app |
+| `src/devices.js` | Phones signed in to the app: sign-in codes, tokens, push tokens and wake-up checks |
+| `src/notify/` | Slack client, phone calls (APNs for iPhone, FCM for Android) and dry-run logging |
 | `src/app.js` | Routes: web pages, Slack commands and buttons, API |
+| `src/routes/app/`, `src/app-api.js` | The phone app's JSON API (`/api/app/*`): one file of routes per resource, and the shape of each reply |
+| `mobile/` | The phone app |
 | `src/views.js`, `src/http.js` | HTML pages and styles; routing and request handling |
 
-CI runs the tests on Node 22 and 24 with SQLite, and on Postgres 16. The project site in `docs/` is published to GitHub Pages by `.github/workflows/pages.yml`.
+CI runs the tests on Node 22 and 24 with SQLite, and on Postgres 16, plus the phone app's typecheck and Jest tests whenever `mobile/` changes. The project site in `docs/` is published to GitHub Pages by `.github/workflows/pages.yml`.
 
 Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
