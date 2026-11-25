@@ -79,7 +79,8 @@ export const toWeekend = (entry, user) => ({
 export async function buildHome({ db, shifts, rotation, incidents, user, now = new Date() }) {
   const running = await rotation.onCallNow(now);
   const onCall = running?.people.length ? {
-    people: running.people.map(toPerson), until: running.shift.end.toISOString(), backup: toPerson(await rotation.backupFor(running.shift)),
+    people: running.people.map(toPerson), start: running.shift.start.toISOString(), until: running.shift.end.toISOString(),
+    backup: toPerson(await rotation.backupFor(running.shift)),
   } : null;
   const comingUp = (await rotation.schedule(onCall ? shifts.next(now) : shifts.currentOrNext(now), 4)).map((e) => toWeekend(e, user));
   const unresolved = (await incidents.list({ limit: 20 })).filter((i) => i.status !== 'resolved');
