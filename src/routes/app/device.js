@@ -7,6 +7,27 @@ import { appMe } from '../../app-api.js';
 
 const TEST_CALL_MS = 10 * 60_000;
 
+/** Why a phone can't ring: this server has no push keys for its kind of phone. */
+export const noPushKeys = (device) => `Phone calls aren't set up on this server: set ${
+  device.platform === 'ios' ? 'APNS_KEY_ID, APNS_TEAM_ID and APNS_PRIVATE_KEY' : 'FCM_SERVICE_ACCOUNT'} where it runs.`;
+
+/**
+ * Ring one phone with a test call, from the app or from `/page test` in Slack. Answering it in the
+ * next 10 minutes marks that phone tested. Returns the notifier's result with the call's id.
+ */
+export async function ringTestCall({ notify, testCalls }, device, user, now = new Date()) {
+  for (const [id, t] of testCalls) if (now - t.at > TEST_CALL_MS) testCalls.delete(id);
+  const callId = crypto.randomUUID();
+  const result = await notify.callDevice(device, user, {
+    payload: {
+      type: 'test', callId, incidentId: '0', title: 'Test call from PagerDiem', reason: 'Answer it to finish the wake-up checks.',
+      pagedBy: config.appName, attempt: 1, nextCallAt: '', server: config.publicUrl, sentAt: now.toISOString(),
+    },
+  });
+  if (result.ok && !result.dryRun) testCalls.set(callId, { deviceId: device.id, at: now });
+  return { ...result, callId };
+}
+
 export default [
   {
     method: 'get', path: '/api/app/me',
@@ -21,20 +42,12 @@ export default [
   },
   {
     method: 'post', path: '/api/app/device/test-call',
-    handler: async (ctx, { notify, testCalls }) => {
+    handler: async (ctx, deps) => {
       if (!ctx.device.push_token) throw new HttpError(409, 'This phone has not registered for calls yet. Allow notifications first.');
-      const now = new Date();
-      for (const [id, t] of testCalls) if (now - t.at > TEST_CALL_MS) testCalls.delete(id);
-      const callId = crypto.randomUUID();
-      const result = await notify.callDevice(ctx.device, ctx.user, {
-        payload: {
-          type: 'test', callId, incidentId: '0', title: 'Test call from PagerDiem', reason: 'Answer it to finish the wake-up checks.',
-          pagedBy: config.appName, attempt: 1, nextCallAt: '', server: config.publicUrl, sentAt: now.toISOString(),
-        },
-      });
+      const result = await ringTestCall(deps, ctx.device, ctx.user);
+      if (result.dryRun) throw new HttpError(503, noPushKeys(ctx.device));
       if (!result.ok) throw new HttpError(502, `Couldn't reach this phone: ${result.error?.message || 'push failed'}`);
-      testCalls.set(callId, { deviceId: ctx.device.id, at: now });
-      ctx.r.json({ callId });
+      ctx.r.json({ callId: result.callId });
     },
   },
   {

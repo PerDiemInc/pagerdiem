@@ -1,6 +1,7 @@
 // The phone app's JSON API (/api/app/*): sign-in by pairing code, bearer tokens, and every screen's data.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 
 process.env.ALLOWED_EMAIL_DOMAINS = 'example.com';
 
@@ -18,6 +19,7 @@ const people = {};
 before(async () => {
   db = await freshDb();
   config.slack.channel = 'CONCALL'; // so channel posts are sent and recorded, as on a real server
+  config.slack.signingSecret = 'slack-secret';
   app = createApp({ db, notifierOverrides: {
     slack: async (to, text) => { sent.push({ ch: 'slack', to, text }); },
     push: async (device, payload) => { pushed.push({ device, payload }); },
@@ -349,4 +351,69 @@ test('profile errors name the field to fix', async () => {
   const res = await postJson('/api/app/profile', { name: '  ', slack: 'UBEN000000', phone: '+14155550101' }, ben);
   assert.equal(res.status, 400);
   assert.equal((await res.json()).field, 'name');
+});
+
+async function slackCommand(fields, root = base) {
+  const body = new URLSearchParams(fields).toString();
+  const ts = String(Math.floor(Date.now() / 1000));
+  const sig = 'v0=' + crypto.createHmac('sha256', 'slack-secret').update(`v0:${ts}:${body}`).digest('hex');
+  const res = await fetch(`${root}/slack/commands`, {
+    method: 'POST', body,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'x-slack-request-timestamp': ts, 'x-slack-signature': sig },
+  });
+  assert.equal(res.status, 200);
+  return res.json();
+}
+
+async function addPerson(name) {
+  await db.run(`INSERT INTO users (name, email, password_hash, slack_user_id, whatsapp, role, rotation_order) VALUES (?, ?, 'x', ?, ?, 'engineer', ?)`,
+    [name, `${name.toLowerCase()}@example.com`, `U${name.toUpperCase()}000000`, `+1555100${String(name.charCodeAt(0)).padStart(4, '0')}`,
+      await app.rotation.nextRotationOrder()]);
+  return db.get('SELECT * FROM users WHERE name = ?', [name]);
+}
+
+test('/page test in Slack rings only your own phones, and answering marks the phone tested', async () => {
+  const dee = await addPerson('Dee');
+  const phone = await signIn(dee);
+  const tablet = await signIn(dee);
+  await postJson('/api/app/device', { pushToken: 'voip-dee' }, phone);
+  await postJson('/api/app/device', { pushToken: 'voip-dee-2' }, tablet);
+  const incidents = (await db.get('SELECT COUNT(*) AS n FROM incidents')).n;
+  pushed.length = 0;
+  sent.length = 0;
+
+  const reply = await slackCommand({ command: '/page', text: ' Test ', user_id: dee.slack_user_id });
+  assert.equal(reply.response_type, 'ephemeral', 'only you see it');
+  assert.equal(reply.text.match(/Calling Dee's phone/g)?.length, 2);
+  assert.deepEqual(pushed.map((p) => [p.device.push_token, p.payload.type]).sort(), [['voip-dee', 'test'], ['voip-dee-2', 'test']]);
+  assert.equal((await db.get('SELECT COUNT(*) AS n FROM incidents')).n, incidents, 'no incident');
+  assert.deepEqual(sent, [], 'nobody else is told');
+
+  const { callId } = pushed.find((p) => p.device.push_token === 'voip-dee').payload;
+  const res = await postJson('/api/app/device/test-call/answered', { callId }, phone);
+  assert.equal(res.status, 200);
+  assert.ok((await res.json()).testedAt);
+});
+
+test('/page test in Slack says why nothing rang', async () => {
+  assert.match((await slackCommand({ command: '/page', text: 'test', user_id: 'UNOBODY000' })).text, /isn't linked to anyone/);
+  const eve = await addPerson('Eve');
+  assert.match((await slackCommand({ command: '/page', text: 'test', user_id: eve.slack_user_id })).text, /No phone of yours/);
+
+  // A server without push keys says so, here and in the app, instead of pretending to ring.
+  const bare = createApp({ db, notifierOverrides: { slack: async () => {} } });
+  await new Promise((r) => bare.server.listen(0, r));
+  const bareBase = `http://localhost:${bare.server.address().port}`;
+  try {
+    const phone = await signIn(eve);
+    await postJson('/api/app/device', { pushToken: 'voip-eve' }, phone);
+    const { text } = await slackCommand({ command: '/page', text: 'test', user_id: eve.slack_user_id }, bareBase);
+    assert.match(text, /calls aren't set up on this server/);
+    assert.match(text, /APNS_KEY_ID/);
+    const res = await fetch(`${bareBase}/api/app/device/test-call`, { method: 'POST', headers: headers(phone), body: '{}' });
+    assert.equal(res.status, 503);
+    assert.match((await res.json()).error, /calls aren't set up on this server/);
+  } finally {
+    bare.server.close();
+  }
 });
