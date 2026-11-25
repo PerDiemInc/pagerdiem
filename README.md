@@ -123,7 +123,7 @@ Everything company-specific is an environment variable. See [.env.example](.env.
 
 ## Using it
 
-- **Slack:** `/oncall` shows who's on call now and the next weekends. `/page checkout is down` pages them. Optional `/ping checkout is failing` asks an AI to look into it and reply in a thread (off by default; bring your own Claude API key and skill, see [docs/ping.md](docs/ping.md)).
+- **Slack:** `/oncall` shows who's on call now and the next weekends. `/page checkout is down` pages them. `/page test` rings only your own phone, to check calls reach you. Optional `/ping checkout is failing` asks an AI to look into it and reply in a thread (off by default; bring your own Claude API key and skill, see [docs/ping.md](docs/ping.md)).
 - **API:**
 
   ```bash

@@ -23,6 +23,7 @@ import { makeActions, EMAIL, REMOVED } from './actions.js';
 import { makeDevices, CHALLENGE } from './devices.js';
 import { appSignInRedirect } from './app-api.js';
 import { registerAppApi } from './routes/app/index.js';
+import { ringTestCall, noPushKeys } from './routes/app/device.js';
 
 const safeBack = (value, fallback) => (/^\/(?![/\\])[^\r\n\\]*$/.test(String(value || '')) ? value : fallback);
 
@@ -35,6 +36,9 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
   const ping = makePing({ db, rotation, post: pingPost ?? slackPost, fetchImpl: pingFetch });
   const actions = makeActions({ db, shifts, rotation, notify, scheduler });
   const devices = makeDevices(db);
+  // Test calls waiting to be answered: callId -> { deviceId, at }. Kept in memory: a restart
+  // only means asking for another one.
+  const testCalls = new Map();
   const { userCount, userByEmail, userBySlack, createMember } = actions;
   const router = makeRouter();
   const fmt = (d) => formatLocal(d, config.timezone);
@@ -517,13 +521,28 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
     return lines.join('\n');
   }
 
+  /** `/page test`: ring your own phones, to check calls reach you without paging anyone. */
+  async function slackTestCall(user) {
+    if (!user) return "Your Slack account isn't linked to anyone in PagerDiem. Add your Slack member ID to your profile on the web app.";
+    const phones = await devices.forUser(user.id);
+    if (!phones.length) return 'No phone of yours is signed in to the PagerDiem app. Scan the code on the web Team page with the app.';
+    const results = await Promise.all(phones.map((device) => ringTestCall({ notify, testCalls }, device, user)));
+    return phones.map((device, i) => {
+      const name = slackText(device.name);
+      if (results[i].dryRun) return `:no_bell: ${name}: ${noPushKeys(device)}`;
+      if (!results[i].ok) return `:x: Couldn't reach ${name}: ${results[i].error?.message || 'push failed'}`;
+      return `:telephone_receiver: Calling ${name} now. Answer it to check calls reach you.`;
+    }).join('\n');
+  }
+
   router.post('/slack/commands', async (ctx) => {
     requireSlackSignature(ctx);
     const { command, text = '', user_id: slackUser } = ctx.body;
     const title = text.trim();
     if (command === '/page' || (command !== '/oncall' && title.toLowerCase().startsWith('page '))) {
       const what = command === '/page' ? title : title.slice(5).trim();
-      if (!what) return ctx.r.json({ response_type: 'ephemeral', text: 'Usage: `/page <what is broken>`' });
+      if (!what) return ctx.r.json({ response_type: 'ephemeral', text: 'Usage: `/page <what is broken>`, or `/page test` to ring your own phone.' });
+      if (what.toLowerCase() === 'test') return ctx.r.json({ response_type: 'ephemeral', text: await slackTestCall(await userBySlack(slackUser)) });
       const creator = (await userBySlack(slackUser));
       const onCall = (await rotation.onCallNow());
       // Slack needs an answer within 3 seconds, so page in the background.
@@ -611,7 +630,7 @@ export function createApp({ db, notifierOverrides, pingPost, pingFetch } = {}) {
 
   router.get('/healthz', async (ctx) => ctx.r.json({ ok: true }));
 
-  registerAppApi({ router, db, shifts, rotation, incidents, notify, actions, devices });
+  registerAppApi({ router, db, shifts, rotation, incidents, notify, actions, devices, testCalls });
 
   // ---------- server ----------
   // Browsers send Sec-Fetch-Site / Origin on form posts. Slack and the API authenticate with a
